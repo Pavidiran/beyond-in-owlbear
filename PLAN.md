@@ -1,0 +1,64 @@
+# Beyond in Owlbear — plan (draft, 2026-11-07)
+
+## Goal
+Use the real D&D Beyond character sheets inside Owlbear Rodeo, so future campaigns with
+player-built characters do not need hand-transcribed sheets. The Stormwreck extension stays
+as it is for the current campaign.
+
+## What we verified on 2026-10-22
+- A D&D Beyond character page loads inside a cross-origin iframe (no frame-ancestors header).
+- The sign-in page refuses to load in a frame, so login must happen in a pop-up window.
+- An Owlbear extension cannot call D&D Beyond's API with the player's session (origin check).
+- Rolls made inside D&D Beyond only leave it through the unofficial "game log" websocket,
+  which needs a server holding the DM's session cookie (ToS grey area).
+- Firefox/Safari isolate third-party cookies: the framed sheet may stay logged out there.
+
+## Architecture
+Separate static extension, own repo + GitHub Pages, deployed with git like the other one.
+
+1. **Popover (roster)** — per-room list of characters stored in room metadata.
+   DM pastes D&D Beyond links and a display name. Anyone clicks "Open sheet".
+2. **Sheet window (Owlbear modal)** — our page with a toolbar (Sign in, Reload, New tab, Close)
+   and the D&D Beyond sheet in an iframe underneath. Sign in opens the pop-up; when it closes
+   the sheet reloads logged in.
+3. **Later, optional: battle tracker** ported from Stormwreck sheets (initiative, hidden enemy
+   HP, turn order). D&D Beyond has no shared initiative inside Owlbear. Initiative would be typed
+   or rolled with Dice+, since we cannot read rolls from the sheet.
+4. **Roll relay (DM only, no player setup).** Players roll normally in their D&D Beyond sheet
+   (attacks, checks, saves, damage, initiative). Every roll goes into the campaign's game log.
+   A small program the DM runs during the session subscribes to that game log with the DM's
+   D&D Beyond session cookie and campaign ID, and pushes each roll to the DM's Owlbear panel over
+   a local websocket (localhost). The panel writes it into the room's shared roll log and shows
+   a pop-up, so everyone sees "Arthur: Battleaxe attack 17 (1d20+5)". Initiative rolls can fill
+   the battle tracker automatically.
+   - Prior art proving the game-log part: AstralBridge (Python, for Foundry) and beyond-mcp.
+   - DM setup, once: install the relay, paste the CobaltSession cookie value and campaign ID.
+     Players install nothing.
+   - Unofficial API, ToS grey area, can break when D&D Beyond changes things. Only the DM's
+     cookie is involved and it never leaves the DM's machine.
+   - Owl20 (Beyond20 + Owlbear bridge) exists but needs browser extensions on every player's
+     machine, which is what we want to avoid.
+   - Dice+ stays useful for GM/enemy rolls inside Owlbear; it cannot read D&D Beyond rolls.
+
+## Milestones
+- M1: roster + sheet window. Test in a real room: public sheet renders, pop-up login works from
+  inside Owlbear, edits persist after reload.
+- M2: roll relay. Relay program + "Relay" status in the DM's panel + shared roll log in the room.
+  Test: player rolls in D&D Beyond, everyone sees it in Owlbear within a second or two.
+- M3: battle tracker port, fed by relayed initiative rolls.
+
+## Risks
+- D&D Beyond can add a frame-ancestors header any day; the extension would stop working overnight.
+- Pop-ups might be blocked inside Owlbear's extension iframe. Fallback: "New tab" button.
+- Sheets must be set to Public in D&D Beyond to be viewable before login.
+
+## Decisions to make
+- [ ] Repo: public `Pavidiran/beyond-in-owlbear` (public is required for free GitHub Pages).
+- [ ] Relay runtime: Python script (DM installs Python once, same as AstralBridge) or a single
+      .exe built from it. Suggest: Python first, .exe later if it proves itself.
+- [ ] Cookie handling: DM pastes the CobaltSession cookie into a local config file (expires every
+      few weeks, re-paste), or the relay opens a login window and grabs it itself (more code).
+- [ ] What a relayed roll looks like in Owlbear: text in the shared roll log + pop-up. (3D dice
+      cannot replay a given result.)
+- [ ] Access: everyone can open every sheet (simple) vs. each player claims one.
+- [ ] Sheet window: large modal (1280×900) or full screen?
