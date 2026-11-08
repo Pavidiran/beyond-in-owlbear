@@ -38,7 +38,7 @@ for _s in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code
     except Exception:
         pass
 
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 DDB = "https://www.dndbeyond.com"
 AUTH_URL = "https://auth-service.dndbeyond.com/v1/cobalt-token"
 WS_URL = "wss://game-log-api-live.dndbeyond.com/v1"
@@ -128,8 +128,14 @@ def run_login():
         import webview
     except ImportError:
         return 2
-    # Keep Google/Apple/Twitch sign-in pop-ups inside this window instead of the system browser.
-    webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = False
+    # Sign-in providers (Google, Apple, Twitch, ...) open a pop-up that must stay linked to the page that
+    # opened it. pywebview would send it to the system browser or load it in place (both break the
+    # login), so on Windows the request is left unhandled: the Edge engine then opens a proper pop-up.
+    try:
+        from webview.platforms import edgechromium
+        edgechromium.EdgeChrome.on_new_window_request = lambda self, sender, args: None
+    except Exception:
+        webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = False
     found, closed = {}, {"v": False}
     limit = int(os.environ.get("RELAY_LOGIN_TIMEOUT", "900"))  # seconds
 
