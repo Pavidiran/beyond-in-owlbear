@@ -4,7 +4,7 @@
 // plus a secret, set in the panel's settings), writes every D&D Beyond roll into the room's roll log,
 // puts characters into the battle tracker when they roll initiative, and keeps the relay status in the room.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
-import { NS, KEYS, LOG_MAX, uid, campaignIdOf, flattenRoll, sortEntries, emptyBattle, describe, relayUrl } from "./shared.js?v=0.6.0";
+import { NS, KEYS, LOG_MAX, uid, campaignIdOf, flattenRoll, sortEntries, emptyBattle, describe, relayUrl } from "./shared.js?v=0.6.1";
 
 let role = "PLAYER", ws = null, wsUrl = "", relayCampaign = "", retry = null, lastRelay = "", beat = null;
 
@@ -78,6 +78,7 @@ async function connect() {
         await onRoll(msg);
       } else if (msg.type === "hp-result") {
         OBR.broadcast.sendMessage(`${NS}/hp-result`, msg, { destination: "LOCAL" }).catch(() => {});
+        if (msg.ok && msg.char) OBR.broadcast.sendMessage(`${NS}/hp-edited`, { entityId: msg.char.entityId }, { destination: "ALL" }).catch(() => {});
       }
     } catch (e) { console.error("beyond-in-owlbear bg", e); }
   };

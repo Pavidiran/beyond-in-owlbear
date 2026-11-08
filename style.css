@@ -76,3 +76,5 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .php .tmp { color: #60a5fa; }
 .pctl { display: inline-flex; align-items: center; gap: 2px; margin-left: 4px; }
 .pctl input.dmg { width: 40px; }
+.prow .pn[data-act] { cursor: pointer; }
+.prow .pn[data-act]:hover { text-decoration: underline; color: var(--accent); }

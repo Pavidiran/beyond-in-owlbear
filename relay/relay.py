@@ -39,7 +39,7 @@ for _s in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code
     except Exception:
         pass
 
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 DDB = "https://www.dndbeyond.com"
 AUTH_URL = "https://auth-service.dndbeyond.com/v1/cobalt-token"
 WS_URL = "wss://game-log-api-live.dndbeyond.com/v1"
@@ -50,6 +50,7 @@ FROZEN = getattr(sys, "frozen", False)
 HERE = Path(sys.executable).parent if FROZEN else Path(__file__).parent
 CONFIG = HERE / "beyond-relay.json"
 RAWLOG = HERE / "relay-raw.jsonl"        # last raw roll messages, for debugging the format
+LOGFILE = HERE / "relay.log"            # everything the window log shows, for troubleshooting
 LOGIN_RESULT = HERE / ".login-result"    # handed from the login window process to the main window
 DEFAULT_PORT = 8790
 COOKIE_HELP = (
@@ -69,11 +70,21 @@ STATE = {"connected": False, "campaignId": "", "userId": "", "error": ""}
 
 def emit(kind, payload):
     EVENTS.put((kind, payload))
-    if sys.stdout and kind == "log":
+    if kind != "log":
+        return
+    line = f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {payload}"
+    if sys.stdout:
         try:
-            print(f"[{datetime.now():%H:%M:%S}] {payload}", flush=True)
+            print(line, flush=True)
         except Exception:
             pass
+    try:  # relay.log next to the program, for troubleshooting (rotated at 1 MB)
+        if LOGFILE.exists() and LOGFILE.stat().st_size > 1_000_000:
+            LOGFILE.replace(LOGFILE.with_suffix(".log.1"))
+        with LOGFILE.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
 
 
 def log(text): emit("log", text)
@@ -194,7 +205,7 @@ def hit_points(c):
             "stable": bool(ds.get("isStabilized"))}
 
 
-PARTY = {"chars": [], "ids": [], "roster_at": 0.0}
+PARTY = {"chars": [], "ids": [], "roster_at": 0.0, "written": {}}
 HP_URL = "https://character-service.dndbeyond.com/character/v5/life/hp/damage-taken"
 HP_LOCK = asyncio.Lock()
 
@@ -240,9 +251,15 @@ async def change_hp(entity_id, delta, temp):
         try:
             c = await asyncio.to_thread(ddb_get, url, cfg["cobalt"])
             removed, tmp = apply_hp_change(c, delta, temp)
-            await asyncio.to_thread(ddb_put, HP_URL, {"characterId": int(entity_id), "removedHitPoints": removed,
-                                                      "temporaryHitPoints": tmp}, cfg["cobalt"])
-            fresh = hit_points(await asyncio.to_thread(ddb_get, url, cfg["cobalt"]))
+            resp = await asyncio.to_thread(ddb_put, HP_URL, {"characterId": int(entity_id), "removedHitPoints": removed,
+                                                             "temporaryHitPoints": tmp}, cfg["cobalt"])
+            # D&D Beyond answers with the stored values; use them instead of a second read.
+            data = (resp or {}).get("data") or {}
+            log(f"  stored damage {c.get('removedHitPoints') or 0} / temp {c.get('temporaryHitPoints') or 0} -> sent {removed} / {tmp}; D&D Beyond answered {data}")
+            c["removedHitPoints"] = data.get("removedHitPoints", removed)
+            c["temporaryHitPoints"] = data.get("temporaryHitPoints", tmp)
+            fresh = hit_points(c)
+            PARTY["written"][entity_id] = time.time()
         except urllib.error.HTTPError as e:
             msg = f"D&D Beyond refused the change (HTTP {e.code})"
             log(msg); return {"ok": False, "error": msg}
@@ -267,17 +284,23 @@ async def party_watch(cfg):
                 PARTY["roster_at"] = time.time()
             seen = {r["entityId"] for r in RECENT if r.get("entityType") == "character"}
             ids = list(dict.fromkeys(PARTY["ids"] + sorted(seen)))
-            chars = []
+            chars, read_at = [], {}
             for cid in ids:
                 try:
+                    read_at[cid] = time.time()
                     chars.append(hit_points(await asyncio.to_thread(ddb_get, f"https://character-service.dndbeyond.com/character/v5/character/{cid}", cfg["cobalt"])))
                 except Exception as e:
                     log(f"Could not read character {cid}: {e}")
-            chars.sort(key=lambda x: x["name"].lower())
-            if chars != PARTY["chars"]:
-                PARTY["chars"] = chars
-                log("Party HP: " + ", ".join(f"{x['name']} {x['hp']}/{x['max']}" + (f"+{x['temp']}" if x["temp"] else "") for x in chars))
-                await send_all({"type": "party", "chars": chars})
+            async with HP_LOCK:
+                # A DM edit that landed while this round was reading is newer than what we read: keep it.
+                current = {x["entityId"]: x for x in PARTY["chars"]}
+                chars = [current[x["entityId"]] if PARTY["written"].get(x["entityId"], 0) >= read_at.get(x["entityId"], 0) - 1
+                         and x["entityId"] in current else x for x in chars]
+                chars.sort(key=lambda x: x["name"].lower())
+                if chars != PARTY["chars"]:
+                    PARTY["chars"] = chars
+                    log("Party HP: " + ", ".join(f"{x['name']} {x['hp']}/{x['max']}" + (f"+{x['temp']}" if x["temp"] else "") for x in chars))
+                    await send_all({"type": "party", "chars": chars})
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -544,6 +567,7 @@ async def client_handler(ws):
             except Exception:
                 continue
             if isinstance(msg, dict) and msg.get("type") == "hp":
+                log(f"HP request from Owlbear: {json.dumps({k: msg.get(k) for k in ('entityId', 'delta', 'temp', 'reqId')})}")
                 result = await change_hp(str(msg.get("entityId") or ""), msg.get("delta"), msg.get("temp"))
                 await ws.send(json.dumps({"type": "hp-result", "reqId": msg.get("reqId"), **result}))
     except Exception:

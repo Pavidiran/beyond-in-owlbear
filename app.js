@@ -2,9 +2,9 @@
 // the shared roll log and battle tracker. D&D Beyond handles the sheets; the rolls arrive through
 // Beyond Relay on the DM's computer (see bg.js), initiative rolls fill the battle tracker.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
-import { NS, KEYS, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode } from "./shared.js?v=0.6.0";
+import { NS, KEYS, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode } from "./shared.js?v=0.6.1";
 
-const VERSION = "0.6.0";
+const VERSION = "0.6.1";
 const SIZES = { compact: [440, 620], tall: [440, 900], wide: [620, 900] };
 const DDB = "https://www.dndbeyond.com";
 const HOME = `${DDB}/characters`; // "My characters": each player picks their own sheet there
@@ -37,9 +37,13 @@ const battle = () => META[KEYS.battle] || emptyBattle();
 const parseCampaign = (t) => { const m = String(t || "").match(/campaigns\/(\d{3,})/); return m ? `${DDB}/campaigns/${m[1]}` : ""; };
 
 // ------------------------------------------------------------------ sheet frame
-let current = "";
+// The frame is cross-origin, so the browser never tells us its address. We only know the page we
+// opened ourselves; a full page load well after that means the player navigated inside D&D Beyond.
+let current = "", openedAt = 0, wandered = false;
+const sheetId = () => (!wandered && (current.match(/\/characters\/(\d+)/) || [])[1]) || "";
 function go(url) {
   current = url; PREF.last = url; savePref();
+  openedAt = Date.now(); wandered = false;
   $("frame").src = url;
   hint(""); cookieWarned = false; cookieCheck(); // keep the cookie warning if it still applies
 }
@@ -191,7 +195,7 @@ async function sendHp(entityId, delta, temp) {
 function renderParty() {
   const ps = party();
   if (!ps.length) return "";
-  return `<div class="party">${ps.map((p) => `<div class="prow"><span class="pn">${esc(p.name)}</span>${hpBadge(p)}${pcControls(p.entityId)}</div>`).join("")}</div>`;
+  return `<div class="party">${ps.map((p) => `<div class="prow"><span class="pn" data-act="openChar" data-id="${esc(p.entityId)}" title="Open this sheet">${esc(p.name)}</span>${hpBadge(p)}${pcControls(p.entityId)}</div>`).join("")}</div>`;
 }
 
 function renderBattle() {
@@ -252,7 +256,11 @@ async function onAction(act, el) {
     case "zoomOut": PREF.zoom = Math.max(0.5, +(PREF.zoom - 0.05).toFixed(2)); savePref(); layout(); break;
     case "zoomIn": PREF.zoom = Math.min(1.2, +(PREF.zoom + 0.05).toFixed(2)); savePref(); layout(); break;
     case "size": PREF.size = PREF.size === "compact" ? "tall" : PREF.size === "tall" ? "wide" : "compact"; savePref(); layout(); await applySize(); break;
-    case "reload": go(current); break;
+    case "reload":
+      if (wandered) hint("The browser doesn't tell the panel which D&D Beyond page you opened yourself. Open your sheet by clicking your name in the Battle tab's party list; then the reload button keeps it.");
+      else go(current);
+      break;
+    case "openChar": go(`${DDB}/characters/${ds.id}`); break;
     case "tab": window.open(current, "_blank"); break;
     case "gm": $("campaign").value = config().campaignUrl; $("relayCode").value = config().relayCode || ""; $("gm").hidden = !$("gm").hidden; break;
     case "gmClose": $("gm").hidden = true; break;
@@ -332,8 +340,17 @@ async function start() {
   room.on((m) => { META = m || {}; try { renderAll(); } catch (e) { console.error(e); } });
   if (!LOCAL) OBR.broadcast.onMessage(`${NS}/hp-result`, (ev) => {
     const r = ev.data || {};
-    hint(r.ok ? "" : `HP not changed: ${r.error || "unknown error"}`);
+    if (r.ok && r.char) { hint(`${r.char.name}: ${r.char.hp}/${r.char.max}${r.char.temp ? ` +${r.char.temp} temp` : ""} (saved in D&D Beyond)`); setTimeout(() => hint(""), 3000); }
+    else hint(`HP not changed: ${r.error || "unknown error"}`);
   });
+  // After a DM edit, a sheet showing that character reloads (D&D Beyond doesn't notice outside changes).
+  let refreshT = null;
+  if (!LOCAL) OBR.broadcast.onMessage(`${NS}/hp-edited`, (ev) => {
+    if (ev.data && sheetId() && String(ev.data.entityId) === sheetId()) {
+      clearTimeout(refreshT); refreshT = setTimeout(() => go(current), 1500); // one reload after a burst of clicks
+    }
+  });
+  $("frame").addEventListener("load", () => { if (Date.now() - openedAt > 6000) wandered = true; });
   renderAll(); layout(); await applySize();
   go(PREF.last && PREF.last.startsWith(DDB + "/") ? PREF.last : HOME);
   await cookieCheck();
