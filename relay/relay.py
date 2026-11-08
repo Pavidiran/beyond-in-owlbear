@@ -39,7 +39,7 @@ for _s in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code
     except Exception:
         pass
 
-VERSION = "0.7.0"
+VERSION = "0.7.1"
 DDB = "https://www.dndbeyond.com"
 AUTH_URL = "https://auth-service.dndbeyond.com/v1/cobalt-token"
 WS_URL = "wss://game-log-api-live.dndbeyond.com/v1"
@@ -276,71 +276,37 @@ async def change_hp(entity_id, delta, temp):
     return {"ok": True, "char": fresh}
 
 
-POLL_SECONDS = 20       # full read of every character; gentle on purpose
-NUDGE_DELAY = 2         # after a roll, wait a moment so the player can finish an HP change
-
-
-def nudge_hp(entity_id):
-    """Something happened for this character (e.g. a roll): re-read just it soon, instead of waiting for the poll."""
-    wake = PARTY.get("wake")
-    if entity_id and wake is not None:
-        PARTY["pending"].add(str(entity_id))
-        wake.set()
-
-
 async def party_watch(cfg):
-    """Reads every character every 20 s, and single characters right after they rolled.
-    Sends hit points to Owlbear whenever something changed."""
-    PARTY["wake"] = asyncio.Event()
-    PARTY["pending"] = set()
-    full_at = 0.0
+    """Polls the campaign's characters every 20 s and sends their hit points when something changed."""
     while True:
         try:
             if time.time() - PARTY["roster_at"] > 300 or not PARTY["ids"]:
                 PARTY["ids"] = await asyncio.to_thread(campaign_character_ids, cfg)
                 PARTY["roster_at"] = time.time()
-            full = time.time() - full_at >= POLL_SECONDS
-            if full:
-                seen = {r["entityId"] for r in RECENT if r.get("entityType") == "character"}
-                ids = list(dict.fromkeys(PARTY["ids"] + sorted(seen)))
-                full_at = time.time()
-            else:
-                ids = sorted(PARTY["pending"])
-            PARTY["pending"].clear()
-            read, read_at = {}, {}
+            seen = {r["entityId"] for r in RECENT if r.get("entityType") == "character"}
+            ids = list(dict.fromkeys(PARTY["ids"] + sorted(seen)))
+            chars, read_at = [], {}
             for cid in ids:
                 try:
                     read_at[cid] = time.time()
-                    read[cid] = hit_points(await asyncio.to_thread(ddb_get, f"https://character-service.dndbeyond.com/character/v5/character/{cid}", cfg["cobalt"]))
+                    chars.append(hit_points(await asyncio.to_thread(ddb_get, f"https://character-service.dndbeyond.com/character/v5/character/{cid}", cfg["cobalt"])))
                 except Exception as e:
                     log(f"Could not read character {cid}: {e}")
             async with HP_LOCK:
+                # A DM edit that landed while this round was reading is newer than what we read: keep it.
                 current = {x["entityId"]: x for x in PARTY["chars"]}
-                merged = {} if full else dict(current)
-                for cid, x in read.items():
-                    # A DM edit that landed while we were reading is newer than what we read: keep it.
-                    newer_edit = PARTY["written"].get(cid, 0) >= read_at.get(cid, 0) - 1 and cid in current
-                    merged[cid] = current[cid] if newer_edit else x
-                if full:
-                    for cid in ids:  # characters that failed to read keep their last known values
-                        if cid not in merged and cid in current:
-                            merged[cid] = current[cid]
-                chars = sorted(merged.values(), key=lambda x: x["name"].lower())
+                chars = [current[x["entityId"]] if PARTY["written"].get(x["entityId"], 0) >= read_at.get(x["entityId"], 0) - 1
+                         and x["entityId"] in current else x for x in chars]
+                chars.sort(key=lambda x: x["name"].lower())
                 if chars != PARTY["chars"]:
                     PARTY["chars"] = chars
-                    log(("Party HP: " if full else "Party HP (after a roll): ") +
-                        ", ".join(f"{x['name']} {x['hp']}/{x['max']}" + (f"+{x['temp']}" if x["temp"] else "") for x in chars))
+                    log("Party HP: " + ", ".join(f"{x['name']} {x['hp']}/{x['max']}" + (f"+{x['temp']}" if x["temp"] else "") for x in chars))
                     await send_all({"type": "party", "chars": chars})
         except asyncio.CancelledError:
             raise
         except Exception as e:
             log(f"Party HP update failed: {e}")
-        try:  # sleep until the next full poll, or until a character is nudged
-            await asyncio.wait_for(PARTY["wake"].wait(), timeout=max(1.0, POLL_SECONDS - (time.time() - full_at)))
-            PARTY["wake"].clear()
-            await asyncio.sleep(NUDGE_DELAY)
-        except asyncio.TimeoutError:
-            pass
+        await asyncio.sleep(20)
 
 
 # ---------------------------------------------------------------- login window (runs as its own process)
@@ -556,7 +522,7 @@ def normalize(m):
         t = int(m.get("dateTime") or 0)
     except (TypeError, ValueError):
         t = 0
-    return {"type": "roll", "id": m.get("id"), "t": t or int(time.time() * 1000), "who": ctx.get("name") or "?",
+    return {"type": "roll", "id": d.get("rollId") or m.get("id"), "t": t or int(time.time() * 1000), "who": ctx.get("name") or "?",
             "entityId": str(ctx.get("entityId") or m.get("entityId") or ""), "entityType": ctx.get("entityType") or m.get("entityType"),
             "action": d.get("action") or "", "userId": str(m.get("userId") or ""), "rolls": rolls}
 
@@ -662,14 +628,13 @@ async def game_log(cfg):
                         if et not in EVENT_TYPES_SEEN:
                             EVENT_TYPES_SEEN.add(et)
                             log(f"Game log event type seen: {et} (entity {m.get('entityType')}:{ent}, data keys {sorted((m.get('data') or {}).keys())[:12]})")
-                        if (m.get("entityType") or "") == "character":
-                            nudge_hp(ent)
                     if et != ROLL_EVENT or not m.get("id"):
                         continue
-                    nudge_hp(ent)
-                    if m["id"] in SEEN:
+                    # D&D Beyond can deliver the same roll more than once (different message ids, same rollId).
+                    key = (m.get("data") or {}).get("rollId") or m["id"]
+                    if key in SEEN:
                         continue
-                    SEEN.append(m["id"])
+                    SEEN.append(key)
                     if (m.get("data") or {}).get("__b20Override__") is True:
                         continue  # already bridged by Beyond20 on that player's side
                     try:
