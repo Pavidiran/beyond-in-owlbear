@@ -87,3 +87,11 @@ Separate static extension, own repo + GitHub Pages, deployed with git like the o
       cannot replay a given result.)
 - [ ] Access: everyone can open every sheet (simple) vs. each player claims one.
 - [ ] Sheet window: large modal (1280×900) or full screen?
+
+## Outcome 2026-11-08 — v0.2.0 is the direction
+The "translation layer" idea (relay + own compact panel) was rejected by the user: D&D Beyond
+should handle everything, we only distort the page. v0.2.0 shows dndbeyond.com in the action
+popover (440 wide → D&D Beyond's mobile layout), scaled, with the site header cropped, pop-up
+sign-in, campaign home, character picker, panel size presets. User tested in a room: works,
+including sign-in and the campaign page inside the panel.
+Open ideas, only if asked: DM-only game-log relay for shared rolls; battle tracker port.
