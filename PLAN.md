@@ -176,9 +176,9 @@ State: extension v0.7.0 and relay 0.9.0 live and working (user confirmed fast HP
    into the battle tracker in one step instead of typing them. Check existing options first
    (e.g. D&D Beyond's monster service via the relay, or an existing Owlbear extension).
 2. Monster tab: roll monster attacks, saves and damage from the panel.
-3. Polish: make the extension's roll log and the relay window nicer to look at, and remove
-   buttons that aren't needed (to clarify with the user which ones; relay candidates: "Paste
-   cookie instead...", the separate "Save & connect"). Also ask whether "log" meant logo/icon.
+3. Logos: design a nicer logo for the extension (Owlbear toolbar icon) and for the relay
+   (window/program icon). Also remove buttons that aren't needed (ask which; relay candidates:
+   "Paste cookie instead...", the separate "Save & connect").
 4. Music per map: check existing Owlbear extensions first; otherwise a separate extension.
 Known open issue: a player acting in a stale sheet can overwrite a DM HP edit (mitigated by
 auto-reload of sheets opened from the character list).
