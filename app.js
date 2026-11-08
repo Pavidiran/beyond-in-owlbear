@@ -2,9 +2,9 @@
 // the shared roll log and battle tracker. D&D Beyond handles the sheets; the rolls arrive through
 // Beyond Relay on the DM's computer (see bg.js), initiative rolls fill the battle tracker.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
-import { NS, KEYS, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode } from "./shared.js?v=0.6.2";
+import { NS, KEYS, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode } from "./shared.js?v=0.6.3";
 
-const VERSION = "0.6.2";
+const VERSION = "0.6.3";
 const SIZES = { compact: [440, 620], tall: [440, 900], wide: [620, 900] };
 const DDB = "https://www.dndbeyond.com";
 const HOME = `${DDB}/characters`; // "My characters": each player picks their own sheet there
@@ -184,9 +184,9 @@ function hpBadge(p) {
 function pcControls(entityId) {
   if (ME.role !== "GM" || !pcHp(entityId)) return "";
   const id = esc(entityId);
-  return `<span class="pctl"><input type="number" min="1" class="amt" data-field="amt:${id}" placeholder="1" title="Amount (empty = 1)">` +
-    `<button class="sm heal" data-act="pHeal" data-id="${id}" title="Heal by the amount">Heal</button>` +
-    `<button class="sm dmgb" data-act="pDmg" data-id="${id}" title="Damage by the amount (temporary HP absorbs it first)">Dmg</button>` +
+  return `<span class="pctl"><button class="sm dmgb" data-act="pDmg" data-id="${id}" title="Damage by the amount (temporary HP absorbs it first)">−</button>` +
+    `<input type="number" min="1" class="amt" data-field="amt:${id}" placeholder="1" title="Amount (empty = 1)">` +
+    `<button class="sm heal" data-act="pHeal" data-id="${id}" title="Heal by the amount">+</button>` +
     `<button class="sm" data-act="pTemp" data-id="${id}" title="Set temporary HP to the amount">Temp</button></span>`;
 }
 function amountFor(entityId) {
@@ -222,8 +222,10 @@ function renderBattle() {
     const init = isGM ? `<input type="number" data-field="binit:${e.id}" value="${e.init ?? ""}" title="Initiative">` : `<b>${e.init ?? "–"}</b>`;
     let hp = "";
     if (e.kind === "npc" && isGM) {
-      hp = `<span class="bhp"><button class="sm" data-act="bHp" data-id="${e.id}" data-v="-1">−</button><input type="number" data-field="bhp:${e.id}" value="${e.hp}"><button class="sm" data-act="bHp" data-id="${e.id}" data-v="1">+</button><span class="muted">/${e.maxHp}</span></span>
-            <input type="number" class="dmg" data-field="bdmg:${e.id}" placeholder="dmg" title="Type damage, press Enter">`;
+      hp = hpBadge({ name: e.name, hp: e.hp || 0, max: e.maxHp || 0, temp: 0 }) +
+        `<span class="pctl"><button class="sm dmgb" data-act="eDmg" data-id="${e.id}" title="Damage by the amount">−</button>` +
+        `<input type="number" min="1" class="amt" data-field="amt:${e.id}" placeholder="1" title="Amount (empty = 1)">` +
+        `<button class="sm heal" data-act="eHeal" data-id="${e.id}" title="Heal by the amount">+</button></span>`;
     } else if (down) hp = `<span class="muted">down</span>`;
     else if (e.kind === "pc") hp = hpBadge(pcHp(e.entityId));
     return `<div class="brow${cur ? " cur" : ""}${down ? " down" : ""}${e.kind === "pc" ? " pc" : ""}"${isGM ? ` data-act="bSetTurn" data-i="${i}"` : ""}>
@@ -249,7 +251,10 @@ function renderBattle() {
   return renderParty() + rows + empty + ctrl;
 }
 
+let pressing = false, renderWaiting = false;
 function renderDrawer() {
+  if (pressing) { renderWaiting = true; return; }
+  renderWaiting = false;
   const keep = keepFocus();
   const rs = relayState(), log = META[KEYS.log] || [], b = battle();
   const last = log[0] ? describe(log[0]) : "";
@@ -298,6 +303,11 @@ async function onAction(act, el) {
     case "pHeal": await sendHp(ds.id, amountFor(ds.id), null, "Heal button"); break;
     case "pDmg": await sendHp(ds.id, -amountFor(ds.id), null, "Dmg button"); break;
     case "pTemp": await sendHp(ds.id, 0, amountFor(ds.id), "Temp button"); break;
+    case "eHeal": case "eDmg": {
+      const n = amountFor(ds.id) * (act === "eHeal" ? 1 : -1);
+      await updateBattle((b) => { const e = b.entries.find((x) => x.id === ds.id); if (e) e.hp = Math.max(0, Math.min(e.maxHp || 999, (e.hp || 0) + n)); });
+      break;
+    }
     case "bHp": await updateBattle((b) => { const e = b.entries.find((x) => x.id === ds.id); if (e) e.hp = Math.max(0, Math.min(e.maxHp || 999, (e.hp || 0) + +ds.v)); }); break;
     case "bClear":
       if (UI.confirmClear > Date.now()) { UI.confirmClear = 0; await updateBattle((b) => { b.entries = []; b.turn = 0; b.round = 1; }); }
@@ -367,6 +377,11 @@ async function start() {
   await cookieCheck();
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") cookieCheck(); });
   setInterval(renderDrawer, 60000); // relay staleness indicator
+  document.addEventListener("pointerdown", () => { pressing = true; }, true);
+  const release = () => { if (!pressing) return; pressing = false; if (renderWaiting) setTimeout(renderDrawer, 60); }; // after the click is delivered
+  document.addEventListener("pointerup", release, true);
+  document.addEventListener("pointercancel", release, true);
+  window.addEventListener("blur", release);
   document.body.addEventListener("click", (ev) => {
     if (ev.target.closest("input")) return; // typing into a battle row must not change the turn
     const el = ev.target.closest("[data-act]"); if (!el) return;
