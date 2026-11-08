@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Beyond in Owlbear</title>
   <link rel="icon" href="icon.svg">
-  <link rel="stylesheet" href="style.css?v=0.2.5">
+  <link rel="stylesheet" href="style.css?v=0.3.0">
 </head>
 <body>
   <div class="bar" id="bar">
-    <button class="ic" data-act="home" title="Campaign / home page">⌂</button>
-    <select id="chars" data-act="pick" title="Characters in this room" hidden></select>
+    <button class="ic" data-act="home" title="My characters on D&D Beyond">⌂</button>
+    <button class="ic" data-act="campaign" id="campaignBtn" title="Campaign page" hidden>Campaign</button>
     <span class="spacer"></span>
     <button class="ic" data-act="login" title="Sign in to D&D Beyond (pop-up), then the page reloads">Sign in</button>
     <button class="ic" data-act="zoomOut" title="Smaller">−</button>
@@ -23,13 +23,11 @@
   </div>
   <div class="hint" id="hint" hidden></div>
   <div class="gm" id="gm" hidden>
-    <label>Campaign link <input type="text" id="campaign" placeholder="https://www.dndbeyond.com/campaigns/1234567"></label>
-    <label>Character links, one per line, optional: <small>name | link</small>
-      <textarea id="links" rows="4" placeholder="Arthur | https://www.dndbeyond.com/characters/123456789"></textarea></label>
+    <label>Campaign link <small>(optional, adds a Campaign button for everyone in this room)</small>
+      <input type="text" id="campaign" placeholder="https://www.dndbeyond.com/campaigns/1234567"></label>
     <div class="row"><button data-act="gmSave">Save for this room</button><button class="ghost" data-act="gmClose">Close</button></div>
-    <div class="muted">Characters must be <b>Public</b> in D&D Beyond (character → Edit → Home → Character Privacy) to show before sign-in.</div>
   </div>
   <div class="wrap" id="wrap"><iframe id="frame" allow="clipboard-write" referrerpolicy="no-referrer-when-downgrade"></iframe></div>
-  <script type="module" src="app.js?v=0.2.5"></script>
+  <script type="module" src="app.js?v=0.3.0"></script>
 </body>
 </html>

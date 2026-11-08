@@ -1,12 +1,13 @@
 // Beyond in Owlbear — the real D&D Beyond page in the Owlbear side panel.
-// No data layer: D&D Beyond handles everything. This file only sizes, scales, crops and navigates the frame.
+// No data layer: D&D Beyond handles everything. This file only sizes, scales and navigates the frame.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
 
-const VERSION = "0.2.5";
+const VERSION = "0.3.0";
 const NS = "com.pavi.beyond-in-owlbear";
 const CFG_KEY = `${NS}/config`;
 const SIZES = { compact: [440, 620], tall: [440, 900], wide: [620, 900] };
-const DEFAULT_HOME = "https://www.dndbeyond.com/characters";
+const DDB = "https://www.dndbeyond.com";
+const HOME = `${DDB}/characters`; // "My characters": each player picks their own sheet there
 
 const $ = (id) => document.getElementById(id);
 let ME = { id: "", name: "", role: "PLAYER" }, META = {};
@@ -14,10 +15,8 @@ let PREF = { zoom: 0.8, size: "tall", last: "" };
 try { Object.assign(PREF, JSON.parse(localStorage.getItem("bio-pref") || "{}")); } catch {}
 const savePref = () => { try { localStorage.setItem("bio-pref", JSON.stringify(PREF)); } catch {} };
 
-const config = () => META[CFG_KEY] || { campaignUrl: "", chars: [] };
-const parseDdbId = (t) => { const m = String(t || "").match(/characters\/(\d{4,})/) || String(t || "").trim().match(/^(\d{4,})$/); return m ? m[1] : null; };
-const parseCampaign = (t) => { const m = String(t || "").match(/campaigns\/(\d{3,})/); return m ? `https://www.dndbeyond.com/campaigns/${m[1]}` : ""; };
-const homeUrl = () => config().campaignUrl || (config().chars[0] ? `https://www.dndbeyond.com/characters/${config().chars[0].ddbId}` : DEFAULT_HOME);
+const config = () => META[CFG_KEY] || { campaignUrl: "" };
+const parseCampaign = (t) => { const m = String(t || "").match(/campaigns\/(\d{3,})/); return m ? `${DDB}/campaigns/${m[1]}` : ""; };
 
 let current = "";
 function go(url) {
@@ -35,7 +34,6 @@ function layout() {
   f.style.width = `${100 / z}%`;
   f.style.height = `${100 / z}%`;
   f.style.transform = `scale(${z})`;
-  f.style.top = "0";
   $("zoomLbl").textContent = `${Math.round(z * 100)}%`;
   $("sizeBtn").textContent = PREF.size === "compact" ? "⤓" : PREF.size === "tall" ? "⤢" : "⤡";
 }
@@ -43,23 +41,18 @@ async function applySize() {
   const [w, h] = SIZES[PREF.size] || SIZES.tall;
   try { await OBR.action.setWidth(w); await OBR.action.setHeight(h); } catch {}
 }
-
-function renderChars() {
-  const sel = $("chars"), chars = config().chars;
-  sel.hidden = !chars.length;
-  sel.innerHTML = `<option value="">Characters…</option>` + chars.map((c) => `<option value="${c.ddbId}">${c.name.replace(/[<>&]/g, "")}</option>`).join("");
+function renderBar() {
+  $("campaignBtn").hidden = !config().campaignUrl;
   $("gmBtn").hidden = ME.role !== "GM";
 }
 
 function signIn() {
   // dndbeyond.com/sign-in refuses to load inside a frame, so the login happens in a pop-up window.
-  const ret = current.startsWith("https://www.dndbeyond.com") ? current.slice("https://www.dndbeyond.com".length) : "/characters";
-  const w = window.open("https://www.dndbeyond.com/sign-in?returnUrl=" + encodeURIComponent(ret), "ddb-signin", "width=560,height=760");
+  const ret = current.startsWith(DDB) ? current.slice(DDB.length) : "/characters";
+  const w = window.open(`${DDB}/sign-in?returnUrl=` + encodeURIComponent(ret), "ddb-signin", "width=560,height=760");
   if (!w) { hint("Pop-ups are blocked. Allow them for this site, or sign in via ↗ and come back."); return; }
-  hint("Sign in in the pop-up, click once inside it, then come back here. The panel reloads by itself (or press ↻).");
-  // Reload when the pop-up closes, or as soon as the player returns to Owlbear (the pop-up may
-  // have opened as a tab that stays open). Firefox grants the signed-in cookies to the frame
-  // only after the player interacted with that pop-up, so the reload must come after it.
+  hint("Sign in in the pop-up, then come back here. The panel reloads by itself (or press ↻).");
+  // Reload when the pop-up closes, or as soon as the player returns to Owlbear.
   let done = false, away = false;
   const finish = () => {
     if (done) return; done = true; clearInterval(t);
@@ -71,44 +64,36 @@ function signIn() {
   const onVis = () => { if (document.visibilityState === "visible") onBack(); };
   const t = setInterval(() => {
     if (w.closed) return finish();
-    const focused = document.hasFocus();           // the pop-up window takes focus; its return hands it back
+    const focused = document.hasFocus();
     if (!focused) away = true; else if (away) finish();
   }, 700);
   setTimeout(() => {
     window.addEventListener("focus", onBack); document.addEventListener("visibilitychange", onVis);
-    for (const ev of ["pointerdown", "mousemove", "keydown"]) document.addEventListener(ev, onBack, true); // any touch of the panel after the pop-up
+    for (const ev of ["pointerdown", "mousemove", "keydown"]) document.addEventListener(ev, onBack, true);
   }, 1500);
 }
 
 async function saveConfig(fn) {
   const m = (await OBR.room.getMetadata()) || {};
-  const cfg = JSON.parse(JSON.stringify(m[CFG_KEY] || { campaignUrl: "", chars: [] }));
+  const cfg = JSON.parse(JSON.stringify(m[CFG_KEY] || { campaignUrl: "" }));
   fn(cfg);
-  META[CFG_KEY] = cfg; renderChars();
+  META[CFG_KEY] = cfg; renderBar();
   await OBR.room.setMetadata({ [CFG_KEY]: cfg });
 }
 
-async function onAction(act, el) {
+async function onAction(act) {
   switch (act) {
-    case "home": go(homeUrl()); break;
-    case "pick": if (el.value) go(`https://www.dndbeyond.com/characters/${el.value}`); break;
+    case "home": go(HOME); break;
+    case "campaign": if (config().campaignUrl) go(config().campaignUrl); break;
     case "login": signIn(); break;
     case "zoomOut": PREF.zoom = Math.max(0.5, +(PREF.zoom - 0.05).toFixed(2)); savePref(); layout(); break;
     case "zoomIn": PREF.zoom = Math.min(1.2, +(PREF.zoom + 0.05).toFixed(2)); savePref(); layout(); break;
     case "size": PREF.size = PREF.size === "compact" ? "tall" : PREF.size === "tall" ? "wide" : "compact"; savePref(); layout(); await applySize(); break;
     case "reload": go(current); break;
     case "tab": window.open(current, "_blank"); break;
-    case "gm": { const c = config(); $("campaign").value = c.campaignUrl; $("links").value = c.chars.map((x) => `${x.name} | https://www.dndbeyond.com/characters/${x.ddbId}`).join("\n"); $("gm").hidden = !$("gm").hidden; break; }
+    case "gm": $("campaign").value = config().campaignUrl; $("gm").hidden = !$("gm").hidden; break;
     case "gmClose": $("gm").hidden = true; break;
-    case "gmSave": {
-      const chars = $("links").value.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
-        const [a, b] = l.includes("|") ? l.split("|").map((s) => s.trim()) : ["", l];
-        const ddbId = parseDdbId(b || a); return ddbId ? { ddbId, name: a || `Character ${ddbId}` } : null;
-      }).filter(Boolean);
-      await saveConfig((cfg) => { cfg.campaignUrl = parseCampaign($("campaign").value); cfg.chars = chars; });
-      $("gm").hidden = true; go(homeUrl());
-      break;
-    }
+    case "gmSave": await saveConfig((cfg) => { cfg.campaignUrl = parseCampaign($("campaign").value); }); $("gm").hidden = true; break;
   }
 }
 
@@ -119,21 +104,20 @@ async function start() {
     META = (await OBR.room.getMetadata()) || {};
     const applyTheme = (t) => document.documentElement.setAttribute("data-theme", t.mode === "LIGHT" ? "light" : "dark");
     applyTheme(await OBR.theme.getTheme()); OBR.theme.onChange(applyTheme);
-    OBR.room.onMetadataChange((m) => { META = m || {}; renderChars(); });
-    OBR.player.onChange((p) => { ME = { id: p.id, name: p.name, role: p.role }; renderChars(); });
+    OBR.room.onMetadataChange((m) => { META = m || {}; renderBar(); });
+    OBR.player.onChange((p) => { ME = { id: p.id, name: p.name, role: p.role }; renderBar(); });
   } else {
     ME = { id: "local", name: "local test", role: "GM" }; // opened outside Owlbear: layout testing only
   }
-  renderChars(); layout(); await applySize();
-  go(PREF.last && PREF.last.startsWith("https://www.dndbeyond.com/") ? PREF.last : homeUrl());
+  renderBar(); layout(); await applySize();
+  go(PREF.last && PREF.last.startsWith(DDB + "/") ? PREF.last : HOME);
   // Firefox and Safari give a framed site its own empty cookie jar. Their automatic exception only
   // applies when the framed site itself opens the sign-in pop-up (D&D Beyond never does), so the
   // player has to allow cross-site cookies for Owlbear once. Chrome/Edge share cookies by default.
   const ua = navigator.userAgent;
   if (/Firefox\//.test(ua)) hint("Firefox, one-time setup: click the shield icon left of the address bar and turn off Enhanced Tracking Protection for owlbear.rodeo. Then use Sign in here. Without it the sheet stays logged out and cannot roll.");
   else if (/Safari\//.test(ua) && !/Chrome\//.test(ua)) hint("Safari, one-time setup: Settings → Privacy → turn off \"Prevent cross-site tracking\". Then use Sign in here. Without it the sheet stays logged out and cannot roll.");
-  document.body.addEventListener("click", (ev) => { const el = ev.target.closest("[data-act]"); if (el && el.tagName !== "SELECT") onAction(el.dataset.act, el).catch((e) => hint(e.message)); });
-  $("chars").addEventListener("change", (ev) => onAction("pick", ev.target));
+  document.body.addEventListener("click", (ev) => { const el = ev.target.closest("[data-act]"); if (el) onAction(el.dataset.act).catch((e) => hint(e.message)); });
   document.title = `Beyond in Owlbear v${VERSION}`;
 }
 if (OBR.isAvailable) OBR.onReady(start); else start();
