@@ -2,7 +2,7 @@
 // No data layer: D&D Beyond handles everything. This file only sizes, scales, crops and navigates the frame.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
 
-const VERSION = "0.2.2";
+const VERSION = "0.2.3";
 const NS = "com.pavi.beyond-in-owlbear";
 const CFG_KEY = `${NS}/config`;
 const SITE_HEADER_PX = 68; // height of dndbeyond.com's top bar in its mobile layout
@@ -58,16 +58,28 @@ function signIn() {
   const ret = current.startsWith("https://www.dndbeyond.com") ? current.slice("https://www.dndbeyond.com".length) : "/characters";
   const w = window.open("https://www.dndbeyond.com/sign-in?returnUrl=" + encodeURIComponent(ret), "ddb-signin", "width=560,height=760");
   if (!w) { hint("Pop-ups are blocked. Allow them for this site, or sign in via ↗ and come back."); return; }
-  hint("Finish signing in in the pop-up, then come back here. The panel reloads by itself.");
+  hint("Sign in in the pop-up, click once inside it, then come back here. The panel reloads by itself (or press ↻).");
   // Reload when the pop-up closes, or as soon as the player returns to Owlbear (the pop-up may
   // have opened as a tab that stays open). Firefox grants the signed-in cookies to the frame
   // only after the player interacted with that pop-up, so the reload must come after it.
-  let done = false;
-  const finish = () => { if (done) return; done = true; clearInterval(t); window.removeEventListener("focus", onBack); document.removeEventListener("visibilitychange", onVis); go(current); };
+  let done = false, away = false;
+  const finish = () => {
+    if (done) return; done = true; clearInterval(t);
+    window.removeEventListener("focus", onBack); document.removeEventListener("visibilitychange", onVis);
+    for (const ev of ["pointerdown", "mousemove", "keydown"]) document.removeEventListener(ev, onBack, true);
+    go(current);
+  };
   const onBack = () => setTimeout(finish, 300);
   const onVis = () => { if (document.visibilityState === "visible") onBack(); };
-  const t = setInterval(() => { if (w.closed) finish(); }, 700);
-  setTimeout(() => { window.addEventListener("focus", onBack); document.addEventListener("visibilitychange", onVis); }, 1500);
+  const t = setInterval(() => {
+    if (w.closed) return finish();
+    const focused = document.hasFocus();           // the pop-up window takes focus; its return hands it back
+    if (!focused) away = true; else if (away) finish();
+  }, 700);
+  setTimeout(() => {
+    window.addEventListener("focus", onBack); document.addEventListener("visibilitychange", onVis);
+    for (const ev of ["pointerdown", "mousemove", "keydown"]) document.addEventListener(ev, onBack, true); // any touch of the panel after the pop-up
+  }, 1500);
 }
 
 async function saveConfig(fn) {
