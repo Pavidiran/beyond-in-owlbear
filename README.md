@@ -22,8 +22,10 @@ https://pavidiran.github.io/beyond-in-owlbear/manifest.json
 
 - Rolls made with D&D Beyond's own dice stay in that player's sheet. Use a dice extension such as
   Dice+ for rolls the whole table should see.
-- Firefox and Safari isolate third-party cookies, so the framed sheet may stay logged out there.
-  Use **New tab** in that case.
+- Firefox and Safari isolate third-party cookies, so the framed sheet stays logged out (and cannot
+  roll) until the player allows them: Firefox → shield icon → turn off Enhanced Tracking Protection
+  for owlbear.rodeo; Safari → Privacy → turn off "Prevent cross-site tracking". Chrome and Edge
+  work out of the box. The panel shows this hint on those browsers.
 
 ## Local testing
 

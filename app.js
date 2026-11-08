@@ -2,7 +2,7 @@
 // No data layer: D&D Beyond handles everything. This file only sizes, scales, crops and navigates the frame.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
 
-const VERSION = "0.2.0";
+const VERSION = "0.2.1";
 const NS = "com.pavi.beyond-in-owlbear";
 const CFG_KEY = `${NS}/config`;
 const SITE_HEADER_PX = 68; // height of dndbeyond.com's top bar in its mobile layout
@@ -109,6 +109,11 @@ async function start() {
   }
   renderChars(); layout(); await applySize();
   go(PREF.last && PREF.last.startsWith("https://www.dndbeyond.com/") ? PREF.last : homeUrl());
+  // Firefox and Safari isolate third-party cookies, so the framed sheet stays logged out
+  // until the player allows cross-site cookies for Owlbear. Chrome/Edge allow them by default.
+  const ua = navigator.userAgent;
+  if (/Firefox\//.test(ua)) hint("Firefox: click the shield icon left of the address bar, turn off Enhanced Tracking Protection for owlbear.rodeo, reload, then use Sign in here. Otherwise the sheet stays logged out and cannot roll.");
+  else if (/Safari\//.test(ua) && !/Chrome\//.test(ua)) hint("Safari: Settings → Privacy → turn off \"Prevent cross-site tracking\", then use Sign in here. Otherwise the sheet stays logged out and cannot roll.");
   document.body.addEventListener("click", (ev) => { const el = ev.target.closest("[data-act]"); if (el && el.tagName !== "SELECT") onAction(el.dataset.act, el).catch((e) => hint(e.message)); });
   $("chars").addEventListener("change", (ev) => onAction("pick", ev.target));
   document.title = `Beyond in Owlbear v${VERSION}`;
