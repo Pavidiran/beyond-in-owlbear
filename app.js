@@ -2,9 +2,9 @@
 // the shared roll log and battle tracker. D&D Beyond handles the sheets; the rolls arrive through
 // Beyond Relay on the DM's computer (see bg.js), initiative rolls fill the battle tracker.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
-import { NS, KEYS, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode } from "./shared.js?v=0.6.5";
+import { NS, KEYS, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode } from "./shared.js?v=0.7.0";
 
-const VERSION = "0.6.5";
+const VERSION = "0.7.0";
 const SIZES = { compact: [440, 620], tall: [440, 900], wide: [620, 900] };
 const DDB = "https://www.dndbeyond.com";
 const HOME = `${DDB}/characters`; // "My characters": each player picks their own sheet there
@@ -210,10 +210,28 @@ function toast(text, ms = 3000) {
   const el = $("toast"); el.textContent = text; el.hidden = false;
   clearTimeout(toastT); toastT = setTimeout(() => { el.hidden = true; }, ms);
 }
-function renderParty() {
+function deathSaves(p) {
+  if (!p || p.hp > 0 || !p.ds) return "";
+  const dot = (n, cls) => [0, 1, 2].map((i) => `<i class="${i < n ? cls : ""}"></i>`).join("");
+  return `<span class="dsv" title="Death saves: ${p.ds[0]} successes, ${p.ds[1]} failures">${dot(p.ds[0], "ok")}<b>/</b>${dot(p.ds[1], "bad")}</span>`;
+}
+const condChips = (p) => (p && p.conditions && p.conditions.length) ? `<span class="conds">${p.conditions.map((c) => `<span class="cond">${esc(c)}</span>`).join("")}</span>` : "";
+function renderPartyTab() {
   const ps = party();
-  if (!ps.length) return "";
-  return `<div class="party">${ps.map((p) => `<div class="prow"><span class="pn" data-act="openChar" data-id="${esc(p.entityId)}" title="Open this sheet">${esc(p.name)}</span>${hpBadge(p)}${pcControls(p.entityId)}</div>`).join("")}</div>`;
+  if (!ps.length) return `<div class="muted pad">The party appears here while the DM's Beyond Relay is running.</div>`;
+  return ps.map((p) => {
+    const stats = [
+      p.ac != null ? `<b>AC ${esc(p.ac)}</b>` : "",
+      p.pp != null ? `<span title="Passive Perception / Insight / Investigation">Passive ${esc(p.pp)} · ${esc(p.pins)} · ${esc(p.pinv)}</span>` : "",
+      p.dc && p.dc.length ? `<span title="Spell save DC">DC ${p.dc.map(esc).join("/")}</span>` : "",
+      p.speed ? `<span>${esc(p.speed)} ft</span>` : "",
+      ...(p.senses || []).map((x) => `<span>${esc(x)}</span>`),
+      p.insp ? `<span class="insp" title="Inspiration">★ Inspiration</span>` : "",
+    ].filter(Boolean).join("<i class='sep'>·</i>");
+    return `<div class="pcard"><div class="pline"><span class="pn" data-act="openChar" data-id="${esc(p.entityId)}" title="Open this sheet">${esc(p.name)}</span>` +
+      `<span class="muted pcls">${esc(p.cls || "")}</span>${hpBadge(p)}${pcControls(p.entityId)}</div>` +
+      `<div class="pstats">${stats}${condChips(p)}${deathSaves(p)}</div></div>`;
+  }).join("");
 }
 
 function renderBattle() {
@@ -222,15 +240,18 @@ function renderBattle() {
     const cur = i === b.turn, down = e.kind === "npc" && e.hp <= 0;
     const init = isGM ? `<input type="number" data-field="binit:${e.id}" value="${e.init ?? ""}" title="Initiative">` : `<b>${e.init ?? "–"}</b>`;
     let hp = "";
+    const pc = e.kind === "pc" ? pcHp(e.entityId) : null;
+    const ac = e.kind === "pc" ? (pc && pc.ac != null ? `<span class="bac" title="Armor class">${esc(pc.ac)}</span>` : `<span class="bac"></span>`)
+      : isGM ? `<input type="number" class="bac" data-field="bac:${e.id}" value="${e.ac ?? ""}" placeholder="AC" title="Armor class (only you see it)">` : `<span class="bac"></span>`;
     if (e.kind === "npc" && isGM) {
       hp = hpBadge({ name: e.name, hp: e.hp || 0, max: e.maxHp || 0, temp: 0 }) +
         `<span class="pctl"><button class="sm dmgb" data-act="eDmg" data-id="${e.id}" title="Damage by the amount">−</button>` +
         `<input type="number" min="1" class="amt" data-field="amt:${e.id}" placeholder="1" title="Amount (empty = 1)">` +
         `<button class="sm heal" data-act="eHeal" data-id="${e.id}" title="Heal by the amount">+</button></span>`;
     } else if (down) hp = `<span class="muted">down</span>`;
-    else if (e.kind === "pc") hp = hpBadge(pcHp(e.entityId));
+    else if (e.kind === "pc") hp = condChips(pc) + deathSaves(pc) + hpBadge(pc);
     return `<div class="brow${cur ? " cur" : ""}${down ? " down" : ""}${e.kind === "pc" ? " pc" : ""}"${isGM ? ` data-act="bSetTurn" data-i="${i}"` : ""}>
-      <span class="mk">${cur ? "▶" : ""}</span><span class="bi">${init}</span><span class="bn">${esc(e.name)}</span>${hp}
+      <span class="mk">${cur ? "▶" : ""}</span><span class="bi">${init}</span><span class="bn">${esc(e.name)}</span>${ac}${hp}
       ${isGM ? `<button class="ic ghost" data-act="bRemove" data-id="${e.id}" title="Remove">×</button>` : ""}</div>`;
   }).join("");
   const empty = !b.entries.length ? `<div class="muted pad">Nobody in the fight yet. Players: roll Initiative in your D&D Beyond sheet.${isGM ? " Add enemies below." : ""}</div>` : "";
@@ -245,11 +266,12 @@ function renderBattle() {
     <div class="badd">
       <input type="text" id="bName" placeholder="Enemy name">
       <input type="number" id="bHpN" placeholder="HP" min="1">
+      <input type="number" id="bAc" placeholder="AC" min="1">
       <input type="number" id="bBonus" placeholder="init +">
       <input type="number" id="bCount" placeholder="×1" min="1" max="30">
       <button data-act="bAdd">Add</button></div>`
     : `<div class="muted pad">Round ${b.round || 1}${now ? ` · ${esc(now.name)}'s turn` : ""}</div>`;
-  return renderParty() + rows + empty + ctrl;
+  return rows + empty + ctrl;
 }
 
 let pressing = false, renderWaiting = false;
@@ -261,9 +283,10 @@ function renderDrawer() {
   const last = log[0] ? describe(log[0]) : "";
   const tab = (id, label) => `<button class="tab${PREF.drawer === id ? " on" : ""}" data-act="drawer" data-v="${id}">${label}</button>`;
   const body = PREF.drawer === "rolls" ? `<div class="dbody">${renderLog()}</div>`
-    : PREF.drawer === "battle" ? `<div class="dbody">${renderBattle()}</div>` : "";
+    : PREF.drawer === "battle" ? `<div class="dbody">${renderBattle()}</div>`
+    : PREF.drawer === "party" ? `<div class="dbody">${renderPartyTab()}</div>` : "";
   $("drawer").innerHTML = `<div class="dbar"><span class="dot ${rs.cls}" title="${esc(rs.text)}"></span>
-      ${tab("rolls", "Rolls")}${tab("battle", `Battle${b.entries.length ? ` · R${b.round || 1}` : ""}`)}
+      ${tab("rolls", "Rolls")}${tab("party", "Party")}${tab("battle", `Battle${b.entries.length ? ` · R${b.round || 1}` : ""}`)}
       <span class="last" title="${esc(last)}">${esc(last || rs.text)}</span></div>${body}`;
   restoreFocus(keep);
 }
@@ -326,6 +349,7 @@ async function onAction(act, el) {
       const name = $("bName").value.trim() || "Enemy";
       const hp = Math.max(1, parseInt($("bHpN").value, 10) || 1);
       const bonus = parseInt($("bBonus").value, 10) || 0;
+      const acIn = parseInt($("bAc").value, 10); const ac = isNaN(acIn) ? null : acIn;
       const count = Math.max(1, Math.min(30, parseInt($("bCount").value, 10) || 1));
       if (document.activeElement) document.activeElement.blur();
       $("bName").value = ""; $("bHpN").value = ""; $("bCount").value = "";
@@ -333,7 +357,7 @@ async function onAction(act, el) {
         const taken = b.entries.filter((e) => e.kind === "npc" && (e.name === name || e.name.startsWith(name + " "))).length;
         for (let i = 0; i < count; i++) {
           const n = count > 1 || taken ? `${name} ${taken + i + 1}` : name;
-          b.entries.push({ id: uid(), kind: "npc", name: n, hp, maxHp: hp, bonus, init: d20() + bonus });
+          b.entries.push({ id: uid(), kind: "npc", name: n, hp, maxHp: hp, ac, bonus, init: d20() + bonus });
         }
         sortEntries(b);
       });
@@ -350,6 +374,7 @@ async function onField(field, el) {
     const e = b.entries.find((x) => x.id === id); if (!e) return;
     if (kind === "bhp" && !isNaN(v)) e.hp = Math.max(0, v);
     if (kind === "binit") { e.init = isNaN(v) ? null : v; sortEntries(b); }
+    if (kind === "bac") e.ac = isNaN(v) ? null : v;
     if (kind === "bdmg") e.hp = Math.max(0, (e.hp || 0) - v);
   });
 }
@@ -400,7 +425,7 @@ async function start() {
   document.body.addEventListener("focusout", (ev) => { const t = ev.target; if (t && t.__pending && t.dataset && t.dataset.field) { t.__pending = false; onField(t.dataset.field, t).catch(() => {}); } });
   document.body.addEventListener("keydown", (ev) => {
     if (ev.key !== "Enter") return;
-    if (["bName", "bHpN", "bBonus", "bCount"].includes(ev.target.id)) { ev.preventDefault(); onAction("bAdd", ev.target).catch((e) => hint(e.message)); }
+    if (["bName", "bHpN", "bAc", "bBonus", "bCount"].includes(ev.target.id)) { ev.preventDefault(); onAction("bAdd", ev.target).catch((e) => hint(e.message)); }
     else if (ev.target.dataset && ev.target.dataset.field) { ev.preventDefault(); ev.target.blur(); }
   });
   document.title = `Beyond in Owlbear v${VERSION}`;

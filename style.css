@@ -93,3 +93,25 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .picker .ptitle { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
 .picker button.pick { display: flex; align-items: center; gap: 8px; justify-content: space-between; padding: 8px 10px; text-align: left; font-size: 13px; }
 .picker .pother { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+
+/* Party tab */
+.pcard { padding: 5px 8px; border-bottom: 1px solid var(--line); }
+.pline { display: flex; align-items: center; gap: 6px; }
+.pline .pn { font-weight: 600; cursor: pointer; }
+.pline .pn:hover { text-decoration: underline; color: var(--accent); }
+.pline .pcls { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.pstats { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 4px; margin-top: 2px; color: var(--fg2); font-size: 11px; }
+.pstats b { color: var(--fg); }
+.pstats .sep { font-style: normal; opacity: .5; }
+.pstats .insp { color: #eab308; }
+.conds { display: inline-flex; gap: 3px; flex-wrap: wrap; }
+.cond { background: color-mix(in srgb, #ef4444 20%, transparent); color: var(--fg); border-radius: 4px; padding: 0 4px; font-size: 10px; }
+.dsv { display: inline-flex; align-items: center; gap: 2px; }
+.dsv i { display: inline-block; width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--fg2); }
+.dsv i.ok { background: #22c55e; border-color: #22c55e; }
+.dsv i.bad { background: #ef4444; border-color: #ef4444; }
+.dsv b { font-weight: 400; color: var(--fg2); margin: 0 2px; }
+/* Battle tab: AC column */
+.brow .bac { width: 30px; text-align: center; color: var(--fg2); font-size: 11px; flex: none; }
+.brow input.bac { width: 34px; color: var(--fg); }
+.badd #bAc { width: 42px; }

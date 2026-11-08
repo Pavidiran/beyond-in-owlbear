@@ -39,7 +39,7 @@ for _s in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code
     except Exception:
         pass
 
-VERSION = "0.8.0"
+VERSION = "0.9.0"
 DDB = "https://www.dndbeyond.com"
 AUTH_URL = "https://auth-service.dndbeyond.com/v1/cobalt-token"
 WS_URL = "wss://game-log-api-live.dndbeyond.com/v1"
@@ -238,10 +238,20 @@ def summary_to_char(sm):
     hpi = sm.get("hitPointInfo") or {}
     ds = sm.get("deathSaveInfo") or {}
     conds = [(x.get("name") if isinstance(x, dict) else str(x)) for x in sm.get("conditions") or []]
+    ci = sm.get("castingInfo") or {}
+    dcs = sorted({int(x.get("value")) for x in ci.get("saveDcs") or [] if x.get("value") is not None})
+    walk = next((x.get("distance") for x in sm.get("speeds") or [] if str(x.get("name", "")).lower() == "walking"), None)
+    classes = " / ".join(f"{c.get('name')} {c.get('level')}" for c in sm.get("classes") or [] if c.get("name"))
     return {"entityId": str(sm.get("characterId")), "name": sm.get("name") or "?",
             "hp": int(hpi.get("current") or 0), "max": int(hpi.get("maximum") or 0), "temp": int(hpi.get("temp") or 0),
             "dead": int(ds.get("failCount") or 0) >= 3, "stable": int(ds.get("successCount") or 0) >= 3,
-            "conditions": [c for c in conds if c]}
+            "conditions": [c for c in conds if c],
+            # stats for the Party and Battle tabs, as D&D Beyond reports them
+            "ac": sm.get("armorClass"), "cls": classes, "level": sm.get("level"),
+            "pp": sm.get("passivePerception"), "pins": sm.get("passiveInsight"), "pinv": sm.get("passiveInvestigation"),
+            "dc": dcs, "speed": walk, "insp": bool(sm.get("inspiration")),
+            "senses": [f"{x.get('name')} {x.get('distance')}".strip() for x in sm.get("senses") or [] if x.get("name")],
+            "ds": [int(ds.get("successCount") or 0), int(ds.get("failCount") or 0)]}
 
 
 def ddb_put(url, payload, cobalt):
@@ -359,13 +369,13 @@ async def party_watch(cfg):
                     # Keep the fresher full read of an announced character over a lagging batch summary.
                     if cid in current and PARTY["fresh_until"].get(cid, 0) > time.time() and cid not in announced:
                         continue
-                    if cid in current and "conditions" not in x:  # full reads carry no condition names: keep the known ones
-                        x = dict(x, conditions=current[cid].get("conditions", []))
+                    if cid in current:  # a full read carries only HP: keep the other known fields
+                        x = {**current[cid], **x} if "ac" not in x else x
                     merged[cid] = x
                 for cid in announced:
                     PARTY["fresh_until"][cid] = time.time() + 4
                 chars = sorted((merged[c] for c in merged if c in ids or c in got), key=lambda x: x["name"].lower())
-                view = lambda cs: [(c["entityId"], c["name"], c["hp"], c["max"], c["temp"], c["dead"], c["stable"], tuple(c.get("conditions", []))) for c in cs]
+                view = lambda cs: json.dumps(cs, sort_keys=True)
                 if view(chars) != view(PARTY["chars"]):
                     PARTY["chars"] = chars
                     log(("Party HP (announced change): " if announced else "Party HP: ") +
