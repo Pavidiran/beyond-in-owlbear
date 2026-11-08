@@ -95,3 +95,9 @@ popover (440 wide → D&D Beyond's mobile layout), scaled, with the site header 
 sign-in, campaign home, character picker, panel size presets. User tested in a room: works,
 including sign-in and the campaign page inside the panel.
 Open ideas, only if asked: DM-only game-log relay for shared rolls; battle tracker port.
+
+## Finding 2026-11-08 — Firefox/Safari sign-in
+Framed D&D Beyond stays logged out in Firefox/Safari. Mozilla's opener heuristic only fires when the
+framed site itself opens the pop-up; D&D Beyond never does, and only its own code could call the
+Storage Access API. No code-side fix exists. Firefox/Safari players: one-time shield/cross-site
+cookie exception for owlbear.rodeo. Chrome/Edge: nothing. The panel shows this per browser (v0.2.4).

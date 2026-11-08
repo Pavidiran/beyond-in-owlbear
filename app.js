@@ -2,7 +2,7 @@
 // No data layer: D&D Beyond handles everything. This file only sizes, scales, crops and navigates the frame.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
 
-const VERSION = "0.2.3";
+const VERSION = "0.2.4";
 const NS = "com.pavi.beyond-in-owlbear";
 const CFG_KEY = `${NS}/config`;
 const SITE_HEADER_PX = 68; // height of dndbeyond.com's top bar in its mobile layout
@@ -129,11 +129,12 @@ async function start() {
   }
   renderChars(); layout(); await applySize();
   go(PREF.last && PREF.last.startsWith("https://www.dndbeyond.com/") ? PREF.last : homeUrl());
-  // Firefox and Safari isolate third-party cookies, so the framed sheet stays logged out
-  // until the player allows cross-site cookies for Owlbear. Chrome/Edge allow them by default.
+  // Firefox and Safari give a framed site its own empty cookie jar. Their automatic exception only
+  // applies when the framed site itself opens the sign-in pop-up (D&D Beyond never does), so the
+  // player has to allow cross-site cookies for Owlbear once. Chrome/Edge share cookies by default.
   const ua = navigator.userAgent;
-  if (/Firefox\//.test(ua)) hint("Firefox: use the Sign in button here (not the one inside the sheet). If the sheet still stays logged out afterwards: shield icon left of the address bar → turn off Enhanced Tracking Protection for owlbear.rodeo.");
-  else if (/Safari\//.test(ua) && !/Chrome\//.test(ua)) hint("Safari: use the Sign in button here. If the sheet stays logged out afterwards: Settings → Privacy → turn off \"Prevent cross-site tracking\".");
+  if (/Firefox\//.test(ua)) hint("Firefox, one-time setup: click the shield icon left of the address bar and turn off Enhanced Tracking Protection for owlbear.rodeo. Then use Sign in here. Without it the sheet stays logged out and cannot roll.");
+  else if (/Safari\//.test(ua) && !/Chrome\//.test(ua)) hint("Safari, one-time setup: Settings → Privacy → turn off \"Prevent cross-site tracking\". Then use Sign in here. Without it the sheet stays logged out and cannot roll.");
   document.body.addEventListener("click", (ev) => { const el = ev.target.closest("[data-act]"); if (el && el.tagName !== "SELECT") onAction(el.dataset.act, el).catch((e) => hint(e.message)); });
   $("chars").addEventListener("change", (ev) => onAction("pick", ev.target));
   document.title = `Beyond in Owlbear v${VERSION}`;

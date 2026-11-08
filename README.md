@@ -20,13 +20,15 @@ https://pavidiran.github.io/beyond-in-owlbear/manifest.json
 
 ## Limits
 
+- Sign in only through the panel's **Sign in** button: D&D Beyond refuses to show its login page inside
+  a frame, so the login opens in a pop-up and the panel reloads when you come back.
+- **Firefox and Safari** give a framed site its own empty cookie jar, and their automatic exception
+  only applies when the framed site itself opens the pop-up, which D&D Beyond never does. Those
+  players do a one-time step: Firefox → shield icon left of the address bar → turn off Enhanced
+  Tracking Protection for owlbear.rodeo; Safari → Privacy → turn off "Prevent cross-site tracking".
+  Chrome and Edge need nothing. (Verified 2026-11-08; `test/depth.html` reproduces it.)
 - Rolls made with D&D Beyond's own dice stay in that player's sheet. Use a dice extension such as
   Dice+ for rolls the whole table should see.
-- Sign in always through the panel's own **Sign in** button: it opens D&D Beyond's login in a pop-up
-  (the login page refuses to load inside a frame) and the panel reloads when you come back.
-  Firefox and Safari isolate third-party cookies; they grant them to the frame after you interact
-  with that pop-up. If the sheet still stays logged out: Firefox → shield icon → turn off Enhanced
-  Tracking Protection for owlbear.rodeo; Safari → Privacy → turn off "Prevent cross-site tracking".
 
 ## Local testing
 
