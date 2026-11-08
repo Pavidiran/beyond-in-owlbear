@@ -31,7 +31,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r relay/requirements.txt pyinstaller
-      - run: pyinstaller --onefile --name beyond-relay --console relay/relay.py
+      - run: pyinstaller --onefile --name beyond-relay --windowed relay/relay.py
       - run: mv "${{ matrix.built }}" "${{ matrix.artifact }}"
         shell: bash
       - uses: actions/upload-artifact@v4
@@ -55,4 +55,4 @@ jobs:
             Windows: download beyond-relay-windows.exe and double-click it (SmartScreen: "More info" → "Run anyway").
             macOS: download beyond-relay-macos, run `chmod +x beyond-relay-macos` once, then right-click → Open.
             Linux: download beyond-relay-linux, `chmod +x`, run it.
-            First start asks for your campaign link and your D&D Beyond session cookie.
+            It opens a small window: paste your campaign link and your D&D Beyond session cookie, click "Save & connect".

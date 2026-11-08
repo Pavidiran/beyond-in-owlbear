@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
-"""Beyond Relay - forwards your D&D Beyond campaign's dice rolls to the "Beyond in Owlbear" extension.
+"""Beyond Relay - shows your D&D Beyond campaign's dice rolls inside Owlbear Rodeo.
 
-Only the DM runs this. It listens to the campaign's game log (the same feed the D&D Beyond website
-uses) with the DM's own session cookie and hands every roll to the Owlbear tab on this computer
-through a local connection (ws://127.0.0.1:8790). Players install nothing.
+Only the DM runs this. It opens a small window: paste the campaign link and your D&D Beyond session
+cookie once, click Connect, keep the window open while playing. It listens to the campaign's game log
+(the same feed the D&D Beyond website uses) and hands every roll to the "Beyond in Owlbear" extension
+in the Owlbear tab on this computer through a local connection (ws://127.0.0.1:8790).
+Players install nothing.
 
-First run asks for the campaign link and the session cookie and saves them next to this program in
-beyond-relay.json. Delete that file to start over.
-
-Unofficial D&D Beyond endpoints: may break when they change things. Nothing is sent anywhere except
-to dndbeyond.com and to your own browser.
+Settings are saved in beyond-relay.json next to this program and never leave this computer.
+Unofficial D&D Beyond endpoints: may break when they change things.
+Run with --console for a terminal-only mode.
 """
 import asyncio
 import base64
 import json
-import os
+import queue
 import re
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -32,11 +33,11 @@ except ImportError:  # pragma: no cover
 
 for _s in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code page
     try:
-        _s.reconfigure(encoding="utf-8", errors="replace")
+        if _s: _s.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
 
-VERSION = "0.1.1"
+VERSION = "0.2.0"
 AUTH_URL = "https://auth-service.dndbeyond.com/v1/cobalt-token"
 WS_URL = "wss://game-log-api-live.dndbeyond.com/v1"
 NAMEID_CLAIM = "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier"
@@ -46,74 +47,58 @@ FROZEN = getattr(sys, "frozen", False)
 HERE = Path(sys.executable).parent if FROZEN else Path(__file__).parent
 CONFIG = HERE / "beyond-relay.json"
 RAWLOG = HERE / "relay-raw.jsonl"  # last raw roll messages, for debugging the format
+DEFAULT_PORT = 8790
+COOKIE_HELP = (
+    "Where to find the cookie (it is your D&D Beyond login; never share it):\n\n"
+    "Firefox:  open dndbeyond.com, press F12, tab 'Storage', 'Cookies', 'https://www.dndbeyond.com',\n"
+    "          row 'CobaltSession' - copy its Value.\n"
+    "Chrome / Edge:  open dndbeyond.com, press F12, tab 'Application', 'Cookies',\n"
+    "          'https://www.dndbeyond.com', row 'CobaltSession' - copy its Value.\n\n"
+    "It expires after a few weeks; then paste a fresh one here."
+)
 
-RECENT = deque(maxlen=30)      # normalized rolls, replayed to a panel when it connects
-SEEN = deque(maxlen=2000)      # message ids, to drop replays after a reconnect
-CLIENTS = set()                # connected Owlbear panels
+EVENTS = queue.Queue()          # messages from the relay thread to the window
+RECENT = deque(maxlen=30)       # normalized rolls, replayed to a panel when it connects
+SEEN = deque(maxlen=2000)       # message ids, to drop replays after a reconnect
+CLIENTS = set()                 # connected Owlbear panels
 STATE = {"connected": False, "campaignId": "", "userId": "", "error": ""}
 
 
-def log(msg):
-    print(f"[{datetime.now():%H:%M:%S}] {msg}", flush=True)
+def emit(kind, payload):
+    EVENTS.put((kind, payload))
+    if sys.stdout and kind == "log":
+        try:
+            print(f"[{datetime.now():%H:%M:%S}] {payload}", flush=True)
+        except Exception:
+            pass
 
 
-# ---------------------------------------------------------------- config / first run
-def ask(prompt):
-    try:
-        return input(prompt).strip()
-    except EOFError:
-        return ""
+def log(text): emit("log", text)
+def status(text, ok=None): emit("status", (text, ok))
 
 
-def first_run():
-    print()
-    print("=== Beyond Relay - first-time setup ===")
-    print("1) Your D&D Beyond campaign link, e.g. https://www.dndbeyond.com/campaigns/1234567")
-    link = ask("   Campaign link: ")
-    m = re.search(r"campaigns/(\d+)", link) or re.fullmatch(r"\s*(\d+)\s*", link)
-    if not m:
-        print("   That is not a campaign link. Run again."); return None
-    print()
-    print("2) Your D&D Beyond session cookie (never share it; it stays in beyond-relay.json on this PC).")
-    print("   Firefox: open dndbeyond.com, press F12 > Storage > Cookies > https://www.dndbeyond.com > CobaltSession > copy Value")
-    print("   Chrome/Edge: open dndbeyond.com, press F12 > Application > Cookies > https://www.dndbeyond.com > CobaltSession > copy Value")
-    cookie = ask("   CobaltSession value: ")
-    cookie = re.sub(r"^CobaltSession=", "", cookie).strip().strip(";").strip()
-    if len(cookie) < 20:
-        print("   That does not look like the cookie value. Run again."); return None
-    cfg = {"campaignId": m.group(1), "cobalt": cookie, "port": 8790}
-    CONFIG.write_text(json.dumps(cfg, indent=2))
-    print(f"\nSaved to {CONFIG}\n")
-    return cfg
+# ---------------------------------------------------------------- config
+def parse_campaign(text):
+    m = re.search(r"campaigns/(\d+)", text or "") or re.fullmatch(r"\s*(\d+)\s*", text or "")
+    return m.group(1) if m else ""
 
 
-def ask_cookie():
-    print("Your D&D Beyond session cookie (never share it; it stays in beyond-relay.json on this PC).")
-    print("   Firefox: open dndbeyond.com, press F12 > Storage > Cookies > https://www.dndbeyond.com > CobaltSession > copy Value")
-    print("   Chrome/Edge: open dndbeyond.com, press F12 > Application > Cookies > https://www.dndbeyond.com > CobaltSession > copy Value")
-    cookie = ask("   CobaltSession value: ")
-    cookie = re.sub(r"^CobaltSession=", "", cookie).strip().strip(";").strip()
-    return cookie if len(cookie) >= 20 else ""
+def clean_cookie(text):
+    c = re.sub(r"^\s*CobaltSession=", "", text or "").strip().strip(";").strip()
+    return c if len(c) >= 20 else ""
 
 
 def load_config():
-    if not CONFIG.exists():
-        return first_run()
-    try:
-        cfg = json.loads(CONFIG.read_text())
-    except Exception as e:
-        print(f"Cannot read {CONFIG}: {e}. Delete it and run again."); return None
-    if not re.fullmatch(r"\d+", str(cfg.get("campaignId") or "")):
-        print(f"{CONFIG.name} has no campaignId. Delete it and run again."); return None
-    if not cfg.get("cobalt") or "PASTE" in str(cfg.get("cobalt")):
-        print(f"\n=== Beyond Relay - campaign {cfg['campaignId']} needs your session cookie ===")
-        cookie = ask_cookie()
-        if not cookie:
-            print("   That does not look like the cookie value. Run again."); return None
-        cfg["cobalt"] = cookie
-        CONFIG.write_text(json.dumps(cfg, indent=2))
-        print(f"Saved to {CONFIG}\n")
-    return cfg
+    if CONFIG.exists():
+        try:
+            return json.loads(CONFIG.read_text())
+        except Exception:
+            pass
+    return {"campaignId": "", "cobalt": "", "port": DEFAULT_PORT}
+
+
+def save_config(cfg):
+    CONFIG.write_text(json.dumps(cfg, indent=2))
 
 
 # ---------------------------------------------------------------- D&D Beyond auth
@@ -130,8 +115,7 @@ def fetch_token(cobalt):
     payload = token.split(".")[1]
     payload += "=" * (-len(payload) % 4)
     claims = json.loads(base64.urlsafe_b64decode(payload).decode())
-    user_id = str(claims.get(NAMEID_CLAIM) or "")
-    return token, ttl, user_id
+    return token, ttl, str(claims.get(NAMEID_CLAIM) or "")
 
 
 # ---------------------------------------------------------------- roll normalisation
@@ -184,14 +168,11 @@ async def send_all(obj):
     if not CLIENTS:
         return
     msg = json.dumps(obj)
-    dead = []
     for ws in list(CLIENTS):
         try:
             await ws.send(msg)
         except Exception:
-            dead.append(ws)
-    for ws in dead:
-        CLIENTS.discard(ws)
+            CLIENTS.discard(ws)
 
 
 async def client_handler(ws):
@@ -200,7 +181,7 @@ async def client_handler(ws):
     try:
         await ws.send(json.dumps({"type": "hello", "version": VERSION, "campaignId": STATE["campaignId"],
                                   "connected": STATE["connected"], "recent": list(RECENT)}))
-        async for _ in ws:  # the panel does not need to send anything; keep the socket open
+        async for _ in ws:
             pass
     except Exception:
         pass
@@ -209,8 +190,9 @@ async def client_handler(ws):
         log(f"Owlbear panel disconnected ({len(CLIENTS)} total)")
 
 
-async def set_status(connected, error=""):
+async def set_status(connected, text, error=""):
     STATE["connected"], STATE["error"] = connected, error
+    status(text, connected)
     await send_all({"type": "status", "connected": connected, "error": error, "campaignId": STATE["campaignId"]})
 
 
@@ -219,16 +201,15 @@ async def game_log(cfg):
     backoff = [1, 2, 5, 10, 20, 30]
     attempt = 0
     while True:
+        await set_status(False, "Connecting to D&D Beyond...")
         try:
             token, ttl, user_id = await asyncio.to_thread(fetch_token, cfg["cobalt"])
         except urllib.error.HTTPError as e:
-            msg = f"D&D Beyond rejected the session cookie (HTTP {e.code}). It has probably expired: delete {CONFIG.name} and run again to paste a fresh one."
-            log(msg); await set_status(False, msg); await asyncio.sleep(60); continue
+            msg = f"D&D Beyond rejected the session cookie (HTTP {e.code}). It has probably expired: paste a fresh one and click Save & connect."
+            log(msg); await set_status(False, msg, msg); await asyncio.sleep(120); continue
         except Exception as e:
             msg = f"Could not reach D&D Beyond: {e}"
-            log(msg); await set_status(False, msg); await asyncio.sleep(backoff[min(attempt, len(backoff) - 1)]); attempt += 1; continue
-        if not user_id:
-            log("Token has no user id; continuing anyway")
+            log(msg); await set_status(False, msg, msg); await asyncio.sleep(backoff[min(attempt, len(backoff) - 1)]); attempt += 1; continue
         STATE["userId"] = user_id
         url = f"{WS_URL}?gameId={cfg['campaignId']}&userId={user_id}&stt={token}"
         lifetime = max(30, ttl - 40)  # reconnect with a fresh token before this one expires
@@ -236,8 +217,8 @@ async def game_log(cfg):
         try:
             async with websockets.connect(url, additional_headers={"Origin": "https://www.dndbeyond.com", "User-Agent": UA},
                                           ping_interval=20, ping_timeout=20, max_size=4 * 1024 * 1024) as ws:
-                log(f"Listening to campaign {cfg['campaignId']} as user {user_id}. Roll something in D&D Beyond...")
-                await set_status(True)
+                await set_status(True, f"Connected. Listening to campaign {cfg['campaignId']} - roll something in D&D Beyond.")
+                log(f"Connected to campaign {cfg['campaignId']} as user {user_id}")
                 attempt = 0
                 while True:
                     remaining = lifetime - (time.time() - opened)
@@ -267,41 +248,149 @@ async def game_log(cfg):
                     RECENT.append(roll)
                     log(describe(roll))
                     await send_all(roll)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             log(f"Game log connection closed: {e!r}")
-            await set_status(False, str(e))
+            await set_status(False, f"Connection lost, reconnecting... ({e.__class__.__name__})", str(e))
             if time.time() - opened > 15:
                 attempt = 0
             await asyncio.sleep(backoff[min(attempt, len(backoff) - 1)])
             attempt += 1
 
 
-async def main_async(cfg):
+async def relay_main(cfg):
     STATE["campaignId"] = str(cfg["campaignId"])
-    port = int(cfg.get("port") or 8790)
-    async with websockets.serve(client_handler, "127.0.0.1", port):
-        log(f"Beyond Relay v{VERSION} - local endpoint ws://127.0.0.1:{port} (keep this window open during the session)")
+    port = int(cfg.get("port") or DEFAULT_PORT)
+    try:
+        server = await websockets.serve(client_handler, "127.0.0.1", port)
+    except OSError as e:
+        status(f"Port {port} is already in use (is another relay running?): {e}", False); return
+    async with server:
+        log(f"Local endpoint for the Owlbear extension: ws://127.0.0.1:{port}")
         await game_log(cfg)
 
 
-def main():
+class Relay:
+    """Runs the asyncio relay in a background thread; can be restarted with new settings."""
+    def __init__(self):
+        self.loop = asyncio.new_event_loop()
+        self.task = None
+        threading.Thread(target=self.loop.run_forever, daemon=True).start()
+
+    def start(self, cfg):
+        def _go():
+            if self.task and not self.task.done():
+                self.task.cancel()
+            self.task = self.loop.create_task(relay_main(cfg))
+        self.loop.call_soon_threadsafe(_go)
+
+    def stop(self):
+        def _stop():
+            if self.task and not self.task.done():
+                self.task.cancel()
+        self.loop.call_soon_threadsafe(_stop)
+
+
+# ---------------------------------------------------------------- window
+def run_gui():
+    import tkinter as tk
+    from tkinter import ttk, messagebox
+
     cfg = load_config()
-    if not cfg:
-        return 1
+    relay = Relay()
+
+    root = tk.Tk()
+    root.title(f"Beyond Relay {VERSION}")
+    root.minsize(560, 420)
+    frm = ttk.Frame(root, padding=12)
+    frm.pack(fill="both", expand=True)
+    frm.columnconfigure(1, weight=1)
+
+    ttk.Label(frm, text="Shows your D&D Beyond campaign's rolls in Owlbear. Keep this window open while playing.",
+              wraplength=520).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+
+    ttk.Label(frm, text="Campaign link").grid(row=1, column=0, sticky="w")
+    campaign_var = tk.StringVar(value=f"https://www.dndbeyond.com/campaigns/{cfg['campaignId']}" if cfg.get("campaignId") else "")
+    ttk.Entry(frm, textvariable=campaign_var).grid(row=1, column=1, columnspan=2, sticky="ew", pady=2)
+
+    ttk.Label(frm, text="Session cookie").grid(row=2, column=0, sticky="w")
+    cookie_var = tk.StringVar(value=cfg.get("cobalt") or "")
+    ttk.Entry(frm, textvariable=cookie_var, show="*").grid(row=2, column=1, sticky="ew", pady=2)
+    ttk.Button(frm, text="Where is it?", command=lambda: messagebox.showinfo("Session cookie", COOKIE_HELP)).grid(row=2, column=2, padx=(6, 0))
+
+    btn = ttk.Button(frm, text="Save & connect")
+    btn.grid(row=3, column=1, sticky="w", pady=(8, 0))
+
+    status_var = tk.StringVar(value="Not connected")
+    status_lbl = ttk.Label(frm, textvariable=status_var, wraplength=520)
+    status_lbl.grid(row=4, column=0, columnspan=3, sticky="w", pady=(10, 4))
+
+    logbox = tk.Text(frm, height=12, state="disabled", wrap="word")
+    logbox.grid(row=5, column=0, columnspan=3, sticky="nsew")
+    frm.rowconfigure(5, weight=1)
+    ttk.Label(frm, text=f"Settings are saved next to this program. Local endpoint ws://127.0.0.1:{cfg.get('port') or DEFAULT_PORT}",
+              foreground="#777").grid(row=6, column=0, columnspan=3, sticky="w", pady=(6, 0))
+
+    def connect():
+        cid, cookie = parse_campaign(campaign_var.get()), clean_cookie(cookie_var.get())
+        if not cid:
+            messagebox.showerror("Campaign link", "Paste your campaign link, e.g. https://www.dndbeyond.com/campaigns/1234567"); return
+        if not cookie:
+            messagebox.showerror("Session cookie", "Paste the value of the CobaltSession cookie.\n\n" + COOKIE_HELP); return
+        cfg.update({"campaignId": cid, "cobalt": cookie, "port": int(cfg.get("port") or DEFAULT_PORT)})
+        save_config(cfg)
+        relay.start(cfg)
+    btn.configure(command=connect)
+
+    def pump():
+        try:
+            while True:
+                kind, payload = EVENTS.get_nowait()
+                if kind == "status":
+                    text, ok = payload
+                    status_var.set(text)
+                    status_lbl.configure(foreground="#2a9d4a" if ok else "#c0392b" if ok is False else "#333")
+                else:
+                    logbox.configure(state="normal")
+                    logbox.insert("end", f"[{datetime.now():%H:%M:%S}] {payload}\n")
+                    logbox.see("end")
+                    logbox.configure(state="disabled")
+        except queue.Empty:
+            pass
+        root.after(200, pump)
+
+    pump()
+    if cfg.get("campaignId") and clean_cookie(cfg.get("cobalt")):
+        relay.start(cfg)  # settings known from last time: connect right away
+    root.protocol("WM_DELETE_WINDOW", lambda: (relay.stop(), root.destroy()))
+    root.mainloop()
+
+
+# ---------------------------------------------------------------- terminal fallback
+def run_console():
+    cfg = load_config()
+    if not cfg.get("campaignId") or not clean_cookie(cfg.get("cobalt")):
+        print("=== Beyond Relay setup ===")
+        cid = parse_campaign(input("Campaign link: "))
+        print(COOKIE_HELP)
+        cookie = clean_cookie(input("CobaltSession value: "))
+        if not cid or not cookie:
+            print("Invalid input."); return 1
+        cfg.update({"campaignId": cid, "cobalt": cookie, "port": int(cfg.get("port") or DEFAULT_PORT)})
+        save_config(cfg)
     try:
-        asyncio.run(main_async(cfg))
+        asyncio.run(relay_main(cfg))
     except KeyboardInterrupt:
         print("\nStopped.")
     return 0
 
 
 if __name__ == "__main__":
-    code = 0
+    if "--console" in sys.argv:
+        sys.exit(run_console())
     try:
-        code = main()
-    except Exception as e:  # keep the console window readable when double-clicked
-        print(f"\nError: {e!r}")
-        code = 1
-    if FROZEN and code:
-        ask("\nPress Enter to close.")
-    sys.exit(code)
+        run_gui()
+    except ImportError:
+        print("No window toolkit available (tkinter missing); falling back to the terminal.")
+        sys.exit(run_console())
