@@ -133,3 +133,10 @@ character: character-service v5, DM bearer token). Max HP = override, else base 
 Verified against a public sheet (37/45) and the user's campaign (2 characters). Polled every 20 s,
 sent on change, stored in room metadata (KEYS.party), shown at the top of the Battle tab and on PC rows.
 Note: dndbeyond-mcp's calculateMaxHp (base + bonus) is wrong — it ignores CON.
+
+## v0.6.0 / relay 0.6.0 (2026-11-08): DM edits player HP, written back to D&D Beyond
+Verified with the user's OK: the DM's session may write HP to a character owned by another account
+(PUT character-service /character/v5/life/hp/damage-taken, body {characterId, removedHitPoints,
+temporaryHitPoints} — temporaryHitPoints is required). Panel (DM) → LOCAL broadcast → bg → relay ws
+{type:"hp"} → relay re-reads, applies 5e rules (temp HP soaks damage, clamp 0..max), writes, re-reads,
+pushes party update. Only characters of the campaign are accepted.

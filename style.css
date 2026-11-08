@@ -74,3 +74,5 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .php.low .hbar i, .php.zero .hbar i { background: #ef4444; }
 .php.zero, .php.dead { color: #ef4444; font-weight: 600; }
 .php .tmp { color: #60a5fa; }
+.pctl { display: inline-flex; align-items: center; gap: 2px; margin-left: 4px; }
+.pctl input.dmg { width: 40px; }

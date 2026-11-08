@@ -39,7 +39,9 @@ outside Owlbear.
 
 Players roll in their D&D Beyond sheet as usual. To show those rolls in Owlbear (roll log, pop-ups,
 initiative straight into the battle tracker) and the party's hit points (read from D&D Beyond every
-20 seconds, shown in the Battle tab), the DM runs **Beyond Relay** during the session.
+20 seconds, shown in the Battle tab), the DM runs **Beyond Relay** during the session. The DM can
+also change a player's HP from the Battle tab (type 5 for damage, +5 to heal, t5 for temporary HP);
+the relay writes it to D&D Beyond, so the sheet and the tracker always agree.
 Players install nothing.
 
 1. Download the program for your system from the

@@ -4,7 +4,7 @@
 // plus a secret, set in the panel's settings), writes every D&D Beyond roll into the room's roll log,
 // puts characters into the battle tracker when they roll initiative, and keeps the relay status in the room.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
-import { NS, KEYS, LOG_MAX, uid, campaignIdOf, flattenRoll, sortEntries, emptyBattle, describe, relayUrl } from "./shared.js?v=0.5.0";
+import { NS, KEYS, LOG_MAX, uid, campaignIdOf, flattenRoll, sortEntries, emptyBattle, describe, relayUrl } from "./shared.js?v=0.6.0";
 
 let role = "PLAYER", ws = null, wsUrl = "", relayCampaign = "", retry = null, lastRelay = "", beat = null;
 
@@ -76,6 +76,8 @@ async function connect() {
         await writeRelay(!!msg.connected, msg.error || "");
       } else if (msg.type === "roll") {
         await onRoll(msg);
+      } else if (msg.type === "hp-result") {
+        OBR.broadcast.sendMessage(`${NS}/hp-result`, msg, { destination: "LOCAL" }).catch(() => {});
       }
     } catch (e) { console.error("beyond-in-owlbear bg", e); }
   };
@@ -97,6 +99,12 @@ OBR.onReady(async () => {
   });
   OBR.broadcast.onMessage(`${NS}/turn`, (ev) => {
     if (ev.data && ev.data.name) OBR.notification.show(`Round ${ev.data.round || 1}: ${ev.data.name}'s turn`, "INFO").catch(() => {});
+  });
+  // DM's panel → this page → relay → D&D Beyond: hit point changes for player characters.
+  OBR.broadcast.onMessage(`${NS}/hp`, (ev) => {
+    const req = ev.data || {};
+    if (role === "GM" && ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "hp", ...req }));
+    else OBR.broadcast.sendMessage(`${NS}/hp-result`, { reqId: req.reqId, ok: false, error: "Beyond Relay is not connected, so HP can't be changed from here" }, { destination: "LOCAL" }).catch(() => {});
   });
   role = await OBR.player.getRole();
   OBR.player.onChange((p) => { if (p.role !== role) { role = p.role; if (role === "GM") connect(); else if (ws) { ws.onclose = null; ws.close(); ws = null; } } });

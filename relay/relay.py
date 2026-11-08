@@ -39,7 +39,7 @@ for _s in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code
     except Exception:
         pass
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 DDB = "https://www.dndbeyond.com"
 AUTH_URL = "https://auth-service.dndbeyond.com/v1/cobalt-token"
 WS_URL = "wss://game-log-api-live.dndbeyond.com/v1"
@@ -195,6 +195,67 @@ def hit_points(c):
 
 
 PARTY = {"chars": [], "ids": [], "roster_at": 0.0}
+HP_URL = "https://character-service.dndbeyond.com/character/v5/life/hp/damage-taken"
+HP_LOCK = asyncio.Lock()
+
+
+def ddb_put(url, payload, cobalt):
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="PUT", headers={
+        "Authorization": f"Bearer {cached_token(cobalt)}", "Cookie": f"CobaltSession={cobalt}", "User-Agent": UA,
+        "Content-Type": "application/json", "Accept": "application/json", "Origin": DDB, "Referer": DDB + "/",
+    })
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.loads(r.read().decode() or "{}")
+
+
+def apply_hp_change(c, delta, temp):
+    """5e rules on D&D Beyond's stored values. delta < 0: damage (temporary HP absorb it first);
+    delta > 0: healing (up to max); temp: set temporary HP. Returns (removedHitPoints, temporaryHitPoints)."""
+    mx = hit_points(c)["max"]
+    removed = int(c.get("removedHitPoints") or 0)
+    tmp = int(c.get("temporaryHitPoints") or 0)
+    if temp is not None:
+        tmp = max(0, int(temp))
+    if delta:
+        d = int(delta)
+        if d < 0:
+            dmg = -d
+            soak = min(tmp, dmg)
+            tmp -= soak
+            removed = min(mx, removed + dmg - soak)
+        else:
+            removed = max(0, removed - d)
+    return removed, tmp
+
+
+async def change_hp(entity_id, delta, temp):
+    """DM-side hit point change from Owlbear, written to D&D Beyond (re-read right before writing)."""
+    cfg = STATE.get("cfg")
+    if not cfg or not re.fullmatch(r"\d+", entity_id or ""):
+        return {"ok": False, "error": "relay not ready"}
+    if entity_id not in PARTY["ids"] and entity_id not in {x["entityId"] for x in PARTY["chars"]}:
+        return {"ok": False, "error": "not a character of this campaign"}
+    url = f"https://character-service.dndbeyond.com/character/v5/character/{entity_id}"
+    async with HP_LOCK:
+        try:
+            c = await asyncio.to_thread(ddb_get, url, cfg["cobalt"])
+            removed, tmp = apply_hp_change(c, delta, temp)
+            await asyncio.to_thread(ddb_put, HP_URL, {"characterId": int(entity_id), "removedHitPoints": removed,
+                                                      "temporaryHitPoints": tmp}, cfg["cobalt"])
+            fresh = hit_points(await asyncio.to_thread(ddb_get, url, cfg["cobalt"]))
+        except urllib.error.HTTPError as e:
+            msg = f"D&D Beyond refused the change (HTTP {e.code})"
+            log(msg); return {"ok": False, "error": msg}
+        except Exception as e:
+            log(f"HP change failed: {e}"); return {"ok": False, "error": str(e)}
+    chars = [fresh if x["entityId"] == entity_id else x for x in PARTY["chars"]]
+    if fresh["entityId"] not in {x["entityId"] for x in chars}:
+        chars.append(fresh)
+    PARTY["chars"] = sorted(chars, key=lambda x: x["name"].lower())
+    what = f"set temp HP {temp}" if temp is not None and not delta else (f"{-int(delta)} damage" if int(delta or 0) < 0 else f"healed {int(delta or 0)}")
+    log(f"{fresh['name']}: {what} -> {fresh['hp']}/{fresh['max']}" + (f" +{fresh['temp']} temp" if fresh["temp"] else ""))
+    await send_all({"type": "party", "chars": PARTY["chars"]})
+    return {"ok": True, "char": fresh}
 
 
 async def party_watch(cfg):
@@ -477,8 +538,14 @@ async def client_handler(ws):
     try:
         await ws.send(json.dumps({"type": "hello", "version": VERSION, "campaignId": STATE["campaignId"],
                                   "connected": STATE["connected"], "recent": list(RECENT), "party": PARTY["chars"]}))
-        async for _ in ws:
-            pass
+        async for raw in ws:
+            try:
+                msg = json.loads(raw)
+            except Exception:
+                continue
+            if isinstance(msg, dict) and msg.get("type") == "hp":
+                result = await change_hp(str(msg.get("entityId") or ""), msg.get("delta"), msg.get("temp"))
+                await ws.send(json.dumps({"type": "hp-result", "reqId": msg.get("reqId"), **result}))
     except Exception:
         pass
     finally:
@@ -557,6 +624,7 @@ async def game_log(cfg):
 
 async def relay_main(cfg):
     STATE["campaignId"] = str(cfg["campaignId"])
+    STATE["cfg"] = cfg
     port = int(cfg.get("port") or DEFAULT_PORT)
     try:
         server = await websockets.serve(client_handler, "localhost", port)

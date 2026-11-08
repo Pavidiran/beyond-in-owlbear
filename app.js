@@ -2,9 +2,9 @@
 // the shared roll log and battle tracker. D&D Beyond handles the sheets; the rolls arrive through
 // Beyond Relay on the DM's computer (see bg.js), initiative rolls fill the battle tracker.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
-import { NS, KEYS, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode } from "./shared.js?v=0.5.0";
+import { NS, KEYS, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode } from "./shared.js?v=0.6.0";
 
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
 const SIZES = { compact: [440, 620], tall: [440, 900], wide: [620, 900] };
 const DDB = "https://www.dndbeyond.com";
 const HOME = `${DDB}/characters`; // "My characters": each player picks their own sheet there
@@ -175,10 +175,23 @@ function hpBadge(p) {
   const txt = p.dead ? "dead" : p.hp <= 0 ? (p.stable ? "0 · stable" : "0 · dying") : `${p.hp}/${p.max}`;
   return `<span class="php ${cls}" title="${esc(p.name)}: ${p.hp}/${p.max}${p.temp ? ` +${p.temp} temp` : ""}"><span class="hbar"><i style="width:${pct}%"></i></span>${txt}${p.temp ? `<span class="tmp">+${p.temp}</span>` : ""}</span>`;
 }
+// DM only: change a player character's HP; the relay writes it to D&D Beyond.
+// Field input: "5" = 5 damage, "+5" = heal 5, "t5" = set temporary HP to 5.
+function pcControls(entityId) {
+  if (ME.role !== "GM" || !pcHp(entityId)) return "";
+  const id = esc(entityId);
+  return `<span class="pctl"><button class="sm" data-act="pHp" data-id="${id}" data-v="-1" title="1 damage">−</button><button class="sm" data-act="pHp" data-id="${id}" data-v="1" title="Heal 1">+</button><input type="text" class="dmg" data-field="php:${id}" placeholder="dmg" title="5 = damage, +5 = heal, t5 = temporary HP. Enter writes it to D&D Beyond."></span>`;
+}
+let hpReq = 0;
+async function sendHp(entityId, delta, temp) {
+  if (LOCAL) { hint(`(local test) would send HP change ${delta ?? ""}${temp != null ? ` temp=${temp}` : ""} for ${entityId}`); return; }
+  hint("Writing to D&D Beyond...");
+  await OBR.broadcast.sendMessage(`${NS}/hp`, { reqId: ++hpReq, entityId, delta: delta || 0, temp: temp ?? null }, { destination: "LOCAL" });
+}
 function renderParty() {
   const ps = party();
   if (!ps.length) return "";
-  return `<div class="party">${ps.map((p) => `<div class="prow"><span class="pn">${esc(p.name)}</span>${hpBadge(p)}</div>`).join("")}</div>`;
+  return `<div class="party">${ps.map((p) => `<div class="prow"><span class="pn">${esc(p.name)}</span>${hpBadge(p)}${pcControls(p.entityId)}</div>`).join("")}</div>`;
 }
 
 function renderBattle() {
@@ -191,7 +204,7 @@ function renderBattle() {
       hp = `<span class="bhp"><button class="sm" data-act="bHp" data-id="${e.id}" data-v="-1">−</button><input type="number" data-field="bhp:${e.id}" value="${e.hp}"><button class="sm" data-act="bHp" data-id="${e.id}" data-v="1">+</button><span class="muted">/${e.maxHp}</span></span>
             <input type="number" class="dmg" data-field="bdmg:${e.id}" placeholder="dmg" title="Type damage, press Enter">`;
     } else if (down) hp = `<span class="muted">down</span>`;
-    else if (e.kind === "pc") hp = hpBadge(pcHp(e.entityId));
+    else if (e.kind === "pc") hp = hpBadge(pcHp(e.entityId)) + pcControls(e.entityId);
     return `<div class="brow${cur ? " cur" : ""}${down ? " down" : ""}${e.kind === "pc" ? " pc" : ""}"${isGM ? ` data-act="bSetTurn" data-i="${i}"` : ""}>
       <span class="mk">${cur ? "▶" : ""}</span><span class="bi">${init}</span><span class="bn">${esc(e.name)}</span>${hp}
       ${isGM ? `<button class="ic ghost" data-act="bRemove" data-id="${e.id}" title="Remove">×</button>` : ""}</div>`;
@@ -257,6 +270,7 @@ async function onAction(act, el) {
     case "bSort": await updateBattle(sortEntries); break;
     case "bReroll": await updateBattle((b) => { for (const e of b.entries) if (e.kind === "npc") e.init = d20() + (e.bonus || 0); sortEntries(b); }); break;
     case "bRemove": await updateBattle((b) => { const i = b.entries.findIndex((e) => e.id === ds.id); if (i >= 0) { b.entries.splice(i, 1); if (i < b.turn) b.turn--; } }); break;
+    case "pHp": await sendHp(ds.id, +ds.v, null); break;
     case "bHp": await updateBattle((b) => { const e = b.entries.find((x) => x.id === ds.id); if (e) e.hp = Math.max(0, Math.min(e.maxHp || 999, (e.hp || 0) + +ds.v)); }); break;
     case "bClear":
       if (UI.confirmClear > Date.now()) { UI.confirmClear = 0; await updateBattle((b) => { b.entries = []; b.turn = 0; b.round = 1; }); }
@@ -284,6 +298,15 @@ async function onAction(act, el) {
 
 async function onField(field, el) {
   const [kind, id] = field.split(":"); const v = parseInt(el.value, 10);
+  if (kind === "php") {
+    const t = el.value.trim().toLowerCase(); el.value = "";
+    let m;
+    if ((m = t.match(/^t\s*(\d+)$/))) await sendHp(id, 0, +m[1]);
+    else if ((m = t.match(/^\+\s*(\d+)$/))) await sendHp(id, +m[1], null);
+    else if ((m = t.match(/^-?\s*(\d+)$/)) && +m[1] > 0) await sendHp(id, -m[1], null);
+    else if (t) hint("Type 5 for damage, +5 to heal, t5 for temporary HP.");
+    return;
+  }
   if (kind === "bdmg") { el.value = ""; if (isNaN(v) || !v) return; }
   await updateBattle((b) => {
     const e = b.entries.find((x) => x.id === id); if (!e) return;
@@ -307,6 +330,10 @@ async function start() {
   }
   META = await room.get();
   room.on((m) => { META = m || {}; try { renderAll(); } catch (e) { console.error(e); } });
+  if (!LOCAL) OBR.broadcast.onMessage(`${NS}/hp-result`, (ev) => {
+    const r = ev.data || {};
+    hint(r.ok ? "" : `HP not changed: ${r.error || "unknown error"}`);
+  });
   renderAll(); layout(); await applySize();
   go(PREF.last && PREF.last.startsWith(DDB + "/") ? PREF.last : HOME);
   await cookieCheck();
