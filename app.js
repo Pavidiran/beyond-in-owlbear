@@ -2,9 +2,9 @@
 // the shared roll log and battle tracker. D&D Beyond handles the sheets; the rolls arrive through
 // Beyond Relay on the DM's computer (see bg.js), initiative rolls fill the battle tracker.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
-import { NS, KEYS, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode } from "./shared.js?v=0.6.1";
+import { NS, KEYS, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode } from "./shared.js?v=0.6.2";
 
-const VERSION = "0.6.1";
+const VERSION = "0.6.2";
 const SIZES = { compact: [440, 620], tall: [440, 900], wide: [620, 900] };
 const DDB = "https://www.dndbeyond.com";
 const HOME = `${DDB}/characters`; // "My characters": each player picks their own sheet there
@@ -180,17 +180,34 @@ function hpBadge(p) {
   return `<span class="php ${cls}" title="${esc(p.name)}: ${p.hp}/${p.max}${p.temp ? ` +${p.temp} temp` : ""}"><span class="hbar"><i style="width:${pct}%"></i></span>${txt}${p.temp ? `<span class="tmp">+${p.temp}</span>` : ""}</span>`;
 }
 // DM only: change a player character's HP; the relay writes it to D&D Beyond.
-// Field input: "5" = 5 damage, "+5" = heal 5, "t5" = set temporary HP to 5.
+// Number box + labeled buttons, so nothing depends on a sign convention. Empty box = 1.
 function pcControls(entityId) {
   if (ME.role !== "GM" || !pcHp(entityId)) return "";
   const id = esc(entityId);
-  return `<span class="pctl"><button class="sm" data-act="pHp" data-id="${id}" data-v="-1" title="1 damage">−</button><button class="sm" data-act="pHp" data-id="${id}" data-v="1" title="Heal 1">+</button><input type="text" class="dmg" data-field="php:${id}" placeholder="dmg" title="5 = damage, +5 = heal, t5 = temporary HP. Enter writes it to D&D Beyond."></span>`;
+  return `<span class="pctl"><input type="number" min="1" class="amt" data-field="amt:${id}" placeholder="1" title="Amount (empty = 1)">` +
+    `<button class="sm heal" data-act="pHeal" data-id="${id}" title="Heal by the amount">Heal</button>` +
+    `<button class="sm dmgb" data-act="pDmg" data-id="${id}" title="Damage by the amount (temporary HP absorbs it first)">Dmg</button>` +
+    `<button class="sm" data-act="pTemp" data-id="${id}" title="Set temporary HP to the amount">Temp</button></span>`;
+}
+function amountFor(entityId) {
+  const el = $("drawer").querySelector(`[data-field="amt:${CSS.escape(String(entityId))}"]`);
+  const n = el ? parseInt(el.value, 10) : NaN;
+  if (el) el.value = "";
+  return isNaN(n) || n < 1 ? 1 : Math.min(n, 999);
 }
 let hpReq = 0;
-async function sendHp(entityId, delta, temp) {
-  if (LOCAL) { hint(`(local test) would send HP change ${delta ?? ""}${temp != null ? ` temp=${temp}` : ""} for ${entityId}`); return; }
-  hint("Writing to D&D Beyond...");
-  await OBR.broadcast.sendMessage(`${NS}/hp`, { reqId: ++hpReq, entityId, delta: delta || 0, temp: temp ?? null }, { destination: "LOCAL" });
+async function sendHp(entityId, delta, temp, src) {
+  const who = (pcHp(entityId) || {}).name || entityId;
+  const what = temp != null ? `temp HP ${temp}` : delta > 0 ? `heal ${delta}` : `${-delta} damage`;
+  if (LOCAL) { toast(`(local test) ${who}: ${what} [${src}]`); return; }
+  toast(`${who}: ${what}...`);
+  await OBR.broadcast.sendMessage(`${NS}/hp`, { reqId: ++hpReq, entityId, delta: delta || 0, temp: temp ?? null, src: `${src} on ${who}` }, { destination: "LOCAL" });
+}
+// Floating note: never pushes the layout, so buttons can't move under the pointer.
+let toastT = null;
+function toast(text, ms = 3000) {
+  const el = $("toast"); el.textContent = text; el.hidden = false;
+  clearTimeout(toastT); toastT = setTimeout(() => { el.hidden = true; }, ms);
 }
 function renderParty() {
   const ps = party();
@@ -208,7 +225,7 @@ function renderBattle() {
       hp = `<span class="bhp"><button class="sm" data-act="bHp" data-id="${e.id}" data-v="-1">−</button><input type="number" data-field="bhp:${e.id}" value="${e.hp}"><button class="sm" data-act="bHp" data-id="${e.id}" data-v="1">+</button><span class="muted">/${e.maxHp}</span></span>
             <input type="number" class="dmg" data-field="bdmg:${e.id}" placeholder="dmg" title="Type damage, press Enter">`;
     } else if (down) hp = `<span class="muted">down</span>`;
-    else if (e.kind === "pc") hp = hpBadge(pcHp(e.entityId)) + pcControls(e.entityId);
+    else if (e.kind === "pc") hp = hpBadge(pcHp(e.entityId));
     return `<div class="brow${cur ? " cur" : ""}${down ? " down" : ""}${e.kind === "pc" ? " pc" : ""}"${isGM ? ` data-act="bSetTurn" data-i="${i}"` : ""}>
       <span class="mk">${cur ? "▶" : ""}</span><span class="bi">${init}</span><span class="bn">${esc(e.name)}</span>${hp}
       ${isGM ? `<button class="ic ghost" data-act="bRemove" data-id="${e.id}" title="Remove">×</button>` : ""}</div>`;
@@ -278,7 +295,9 @@ async function onAction(act, el) {
     case "bSort": await updateBattle(sortEntries); break;
     case "bReroll": await updateBattle((b) => { for (const e of b.entries) if (e.kind === "npc") e.init = d20() + (e.bonus || 0); sortEntries(b); }); break;
     case "bRemove": await updateBattle((b) => { const i = b.entries.findIndex((e) => e.id === ds.id); if (i >= 0) { b.entries.splice(i, 1); if (i < b.turn) b.turn--; } }); break;
-    case "pHp": await sendHp(ds.id, +ds.v, null); break;
+    case "pHeal": await sendHp(ds.id, amountFor(ds.id), null, "Heal button"); break;
+    case "pDmg": await sendHp(ds.id, -amountFor(ds.id), null, "Dmg button"); break;
+    case "pTemp": await sendHp(ds.id, 0, amountFor(ds.id), "Temp button"); break;
     case "bHp": await updateBattle((b) => { const e = b.entries.find((x) => x.id === ds.id); if (e) e.hp = Math.max(0, Math.min(e.maxHp || 999, (e.hp || 0) + +ds.v)); }); break;
     case "bClear":
       if (UI.confirmClear > Date.now()) { UI.confirmClear = 0; await updateBattle((b) => { b.entries = []; b.turn = 0; b.round = 1; }); }
@@ -306,15 +325,7 @@ async function onAction(act, el) {
 
 async function onField(field, el) {
   const [kind, id] = field.split(":"); const v = parseInt(el.value, 10);
-  if (kind === "php") {
-    const t = el.value.trim().toLowerCase(); el.value = "";
-    let m;
-    if ((m = t.match(/^t\s*(\d+)$/))) await sendHp(id, 0, +m[1]);
-    else if ((m = t.match(/^\+\s*(\d+)$/))) await sendHp(id, +m[1], null);
-    else if ((m = t.match(/^-?\s*(\d+)$/)) && +m[1] > 0) await sendHp(id, -m[1], null);
-    else if (t) hint("Type 5 for damage, +5 to heal, t5 for temporary HP.");
-    return;
-  }
+  if (kind === "amt") return; // read by the Heal/Dmg/Temp buttons
   if (kind === "bdmg") { el.value = ""; if (isNaN(v) || !v) return; }
   await updateBattle((b) => {
     const e = b.entries.find((x) => x.id === id); if (!e) return;
@@ -340,8 +351,8 @@ async function start() {
   room.on((m) => { META = m || {}; try { renderAll(); } catch (e) { console.error(e); } });
   if (!LOCAL) OBR.broadcast.onMessage(`${NS}/hp-result`, (ev) => {
     const r = ev.data || {};
-    if (r.ok && r.char) { hint(`${r.char.name}: ${r.char.hp}/${r.char.max}${r.char.temp ? ` +${r.char.temp} temp` : ""} (saved in D&D Beyond)`); setTimeout(() => hint(""), 3000); }
-    else hint(`HP not changed: ${r.error || "unknown error"}`);
+    if (r.ok && r.char) toast(`${r.char.name}: ${r.char.hp}/${r.char.max}${r.char.temp ? ` +${r.char.temp} temp` : ""} (saved in D&D Beyond)`);
+    else toast(`HP not changed: ${r.error || "unknown error"}`, 6000);
   });
   // After a DM edit, a sheet showing that character reloads (D&D Beyond doesn't notice outside changes).
   let refreshT = null;

@@ -39,7 +39,7 @@ for _s in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code
     except Exception:
         pass
 
-VERSION = "0.6.1"
+VERSION = "0.6.2"
 DDB = "https://www.dndbeyond.com"
 AUTH_URL = "https://auth-service.dndbeyond.com/v1/cobalt-token"
 WS_URL = "wss://game-log-api-live.dndbeyond.com/v1"
@@ -567,7 +567,7 @@ async def client_handler(ws):
             except Exception:
                 continue
             if isinstance(msg, dict) and msg.get("type") == "hp":
-                log(f"HP request from Owlbear: {json.dumps({k: msg.get(k) for k in ('entityId', 'delta', 'temp', 'reqId')})}")
+                log(f"HP request from Owlbear: {json.dumps({k: msg.get(k) for k in ('entityId', 'delta', 'temp', 'src', 'reqId')})}")
                 result = await change_hp(str(msg.get("entityId") or ""), msg.get("delta"), msg.get("temp"))
                 await ws.send(json.dumps({"type": "hp-result", "reqId": msg.get("reqId"), **result}))
     except Exception:
