@@ -2,16 +2,15 @@
 // No data layer: D&D Beyond handles everything. This file only sizes, scales, crops and navigates the frame.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
 
-const VERSION = "0.2.4";
+const VERSION = "0.2.5";
 const NS = "com.pavi.beyond-in-owlbear";
 const CFG_KEY = `${NS}/config`;
-const SITE_HEADER_PX = 68; // height of dndbeyond.com's top bar in its mobile layout
 const SIZES = { compact: [440, 620], tall: [440, 900], wide: [620, 900] };
 const DEFAULT_HOME = "https://www.dndbeyond.com/characters";
 
 const $ = (id) => document.getElementById(id);
 let ME = { id: "", name: "", role: "PLAYER" }, META = {};
-let PREF = { zoom: 0.8, crop: true, size: "tall", last: "" };
+let PREF = { zoom: 0.8, size: "tall", last: "" };
 try { Object.assign(PREF, JSON.parse(localStorage.getItem("bio-pref") || "{}")); } catch {}
 const savePref = () => { try { localStorage.setItem("bio-pref", JSON.stringify(PREF)); } catch {} };
 
@@ -28,17 +27,16 @@ function go(url) {
 }
 function hint(t) { $("hint").textContent = t; $("hint").hidden = !t; }
 
-// Scale and crop from outside: the frame is rendered larger, then shrunk with a transform,
-// and shifted up so D&D Beyond's site header sits above the visible area.
+// Scale from outside: the frame is rendered larger, then shrunk with a transform. (Cropping the site
+// header away was tried and dropped: D&D Beyond's dialogs are pinned to the frame top and got cut too.)
 function layout() {
-  const z = PREF.zoom, crop = PREF.crop ? SITE_HEADER_PX : 0;
+  const z = PREF.zoom;
   const f = $("frame");
   f.style.width = `${100 / z}%`;
-  f.style.height = `calc(${100 / z}% + ${crop}px)`;
+  f.style.height = `${100 / z}%`;
   f.style.transform = `scale(${z})`;
-  f.style.top = `${-crop * z}px`;
+  f.style.top = "0";
   $("zoomLbl").textContent = `${Math.round(z * 100)}%`;
-  $("cropBtn").classList.toggle("on", PREF.crop);
   $("sizeBtn").textContent = PREF.size === "compact" ? "⤓" : PREF.size === "tall" ? "⤢" : "⤡";
 }
 async function applySize() {
@@ -97,7 +95,6 @@ async function onAction(act, el) {
     case "login": signIn(); break;
     case "zoomOut": PREF.zoom = Math.max(0.5, +(PREF.zoom - 0.05).toFixed(2)); savePref(); layout(); break;
     case "zoomIn": PREF.zoom = Math.min(1.2, +(PREF.zoom + 0.05).toFixed(2)); savePref(); layout(); break;
-    case "crop": PREF.crop = !PREF.crop; savePref(); layout(); break;
     case "size": PREF.size = PREF.size === "compact" ? "tall" : PREF.size === "tall" ? "wide" : "compact"; savePref(); layout(); await applySize(); break;
     case "reload": go(current); break;
     case "tab": window.open(current, "_blank"); break;

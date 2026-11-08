@@ -11,10 +11,8 @@ https://pavidiran.github.io/beyond-in-owlbear/manifest.json
 
 ## How it works
 
-- The panel shows the real D&D Beyond page, in D&D Beyond's own mobile layout, scaled down and with
-  the site header cropped away. Nothing is translated or re-implemented.
-- Toolbar: home (campaign page), character picker, Sign in (pop-up), zoom, hide site header,
-  panel size (compact / tall / wide), reload, open in a browser tab, and DM room settings.
+- The panel shows the real D&D Beyond page, in D&D Beyond's own mobile layout, scaled down. Nothing is translated or re-implemented.
+- Toolbar: home (campaign page), character picker, Sign in (pop-up), zoom, panel size (compact / tall / wide), reload, open in a browser tab, and DM room settings.
 - The DM pastes the campaign link and optionally character links once per room. Players need
   nothing installed; they sign in inside the panel to edit their own character.
 
