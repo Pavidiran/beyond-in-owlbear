@@ -38,7 +38,7 @@ for _s in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code
     except Exception:
         pass
 
-VERSION = "0.3.2"
+VERSION = "0.3.3"
 DDB = "https://www.dndbeyond.com"
 AUTH_URL = "https://auth-service.dndbeyond.com/v1/cobalt-token"
 WS_URL = "wss://game-log-api-live.dndbeyond.com/v1"
@@ -317,7 +317,7 @@ async def relay_main(cfg):
     STATE["campaignId"] = str(cfg["campaignId"])
     port = int(cfg.get("port") or DEFAULT_PORT)
     try:
-        server = await websockets.serve(client_handler, "127.0.0.1", port)
+        server = await websockets.serve(client_handler, "localhost", port)
     except OSError as e:
         status(f"Port {port} is already in use (is another relay running?): {e}", False); return
     async with server:

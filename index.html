@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Beyond in Owlbear</title>
   <link rel="icon" href="icon.svg">
-  <link rel="stylesheet" href="style.css?v=0.3.1">
+  <link rel="stylesheet" href="style.css?v=0.4.0">
 </head>
 <body>
   <div class="bar" id="bar">
@@ -23,11 +23,12 @@
   </div>
   <div class="hint" id="hint" hidden></div>
   <div class="gm" id="gm" hidden>
-    <label>Campaign link <small>(optional, adds a Campaign button for everyone in this room)</small>
+    <label>Campaign link <small>(adds a Campaign button for everyone; the roll relay must be set to the same campaign)</small>
       <input type="text" id="campaign" placeholder="https://www.dndbeyond.com/campaigns/1234567"></label>
     <div class="row"><button data-act="gmSave">Save for this room</button><button class="ghost" data-act="gmClose">Close</button></div>
   </div>
+  <div id="drawer"></div>
   <div class="wrap" id="wrap"><iframe id="frame" allow="clipboard-write" referrerpolicy="no-referrer-when-downgrade"></iframe></div>
-  <script type="module" src="app.js?v=0.3.1"></script>
+  <script type="module" src="app.js?v=0.4.0"></script>
 </body>
 </html>

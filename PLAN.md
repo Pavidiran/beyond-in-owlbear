@@ -101,3 +101,17 @@ Framed D&D Beyond stays logged out in Firefox/Safari. Mozilla's opener heuristic
 framed site itself opens the pop-up; D&D Beyond never does, and only its own code could call the
 Storage Access API. No code-side fix exists. Firefox/Safari players: one-time shield/cross-site
 cookie exception for owlbear.rodeo. Chrome/Edge: nothing. The panel shows this per browser (v0.2.4).
+
+## v0.4.0 (2026-11-08): roll log + battle tracker, and the localhost problem
+- Panel gains a drawer: relay status dot, Rolls tab (shared log, last 25), Battle tab (initiative
+  order, hidden enemy HP for the DM, Next/Back with turn pop-ups for everyone). All writes re-read
+  the room first. Background page (manifest background_url) on the DM's side connects to Beyond
+  Relay on ws://localhost:8790 and writes relayed rolls into the room; "Initiative" rolls enter the
+  battle tracker keyed by D&D Beyond character id. Rooms whose campaign link differs ignore rolls.
+- Real roll format confirmed (data.action "Initiative"/"Greatsword"/"dex", rolls[].rollType
+  "roll"/"to hit"/"check", result.total/text, set[].dice[].dieValue).
+- BLOCKER found: browsers now gate connections from internet pages to localhost ("Local Network
+  Access"). Chrome 147+ blocks it inside iframes unless the parent (Owlbear) delegates the
+  permission, which Owlbear does not; verified denied in Chromium 152. Firefox 154+ shows a
+  permission prompt. => The localhost hop needs replacing by an internet hop (hosted hub both the
+  relay and the extension connect out to). Decision pending with the user.
