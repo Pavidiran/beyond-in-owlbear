@@ -8,7 +8,7 @@
 <iframe id="f" src="https://httpbingo.org/cookies"></iframe>
 <script>
 document.getElementById('o').textContent = location.origin;
-document.getElementById('pop').onclick = () => window.open('https://httpbingo.org/cookies/set?obrtest=two_layers', 'p2', 'width=520,height=520');
+document.getElementById('pop').onclick = () => window.open('https://httpbingo.org/response-headers?Set-Cookie=obrtest%3Dtwo_layers%3B%20Path%3D%2F%3B%20SameSite%3DNone%3B%20Secure', 'p2', 'width=520,height=520');
 document.getElementById('rl').onclick = () => { document.getElementById('f').src = 'https://httpbingo.org/cookies?r=' + Date.now(); };
 </script>
 </body></html>

@@ -21,7 +21,7 @@ In each column: press <b>1</b>, click once inside the pop-up, close it, press <b
 <p><small>Top-level origin: <span id="o"></span>. Afterwards you can delete the test cookie by visiting <a href="https://httpbingo.org/cookies/delete?obrtest=" target="_blank" rel="noopener">httpbingo.org/cookies/delete?obrtest=</a>.</small></p>
 <script>
 document.getElementById('o').textContent = location.origin;
-document.getElementById('pop1').onclick = () => window.open('https://httpbingo.org/cookies/set?obrtest=one_layer', 'p1', 'width=520,height=520');
+document.getElementById('pop1').onclick = () => window.open('https://httpbingo.org/response-headers?Set-Cookie=obrtest%3Done_layer%3B%20Path%3D%2F%3B%20SameSite%3DNone%3B%20Secure', 'p1', 'width=520,height=520');
 document.getElementById('rl1').onclick = () => { document.getElementById('f1').src = 'https://httpbingo.org/cookies?r=' + Date.now(); };
 </script>
 </body></html>
