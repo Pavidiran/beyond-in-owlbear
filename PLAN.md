@@ -155,3 +155,17 @@ reloaded after a DM HP edit, and a player acting on stale HP can overwrite the D
 campaign's characters (relay roster); the panel opens the picked sheet itself, remembers it, and reloads it
 after any DM edit to that character, even if the player clicked elsewhere inside D&D Beyond (user's call).
 Players may open any listed sheet; editing still needs the owner's D&D Beyond login.
+
+## Research 2026-11-08: how D&D Beyond's own map tool (Maps, /games/{campaignId}) gets character HP
+- Batch summary endpoint: POST https://character-service-scds.dndbeyond.com/v2/characters, Bearer token,
+  body {"characterIds":[...]} -> {foundCharacters, notFoundIds, queuedIds}. Each character has
+  hitPointInfo {current, maximum, temp, removedHp, baseTotalHp, override} computed by DDB, plus
+  conditions, deathSaveInfo, armorClass, initiativeBonus/Score. One request for the whole party, ~11 KB
+  for 2 characters (vs ~260 KB per character from character/v5). Verified with the DM session.
+- Maps embeds the sheet and bridges window messages between the sheet frame and the game log. On a
+  "character-sheet/character-update/fulfilled" message for the shown character it reloads the embedded
+  sheet, but only when that sheet does not have focus. Those messages never reached our relay's game-log
+  feed (tested), so they seem to originate from sheets running inside Maps; not available to us.
+- Cheap change marker also exists: character/v5/characters/list?userId=X (~660 B gzip, any campaign
+  member readable with the DM session) has lastModifiedDate == character dateModified, which moves on
+  every HP change (DM write, temp HP, sheet edit; verified to the second).

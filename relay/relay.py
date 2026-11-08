@@ -39,7 +39,7 @@ for _s in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code
     except Exception:
         pass
 
-VERSION = "0.7.1"
+VERSION = "0.8.0"
 DDB = "https://www.dndbeyond.com"
 AUTH_URL = "https://auth-service.dndbeyond.com/v1/cobalt-token"
 WS_URL = "wss://game-log-api-live.dndbeyond.com/v1"
@@ -205,10 +205,43 @@ def hit_points(c):
             "stable": bool(ds.get("isStabilized"))}
 
 
-PARTY = {"chars": [], "ids": [], "roster_at": 0.0, "written": {}}
+PARTY = {"chars": [], "ids": [], "roster_at": 0.0, "written": {}, "fresh_until": {}}
 EVENT_TYPES_SEEN = set()
 HP_URL = "https://character-service.dndbeyond.com/character/v5/life/hp/damage-taken"
 HP_LOCK = asyncio.Lock()
+# Batch character summaries, as used by D&D Beyond's own map tool: one request for the whole party,
+# HP already computed by D&D Beyond (current / maximum / temp).
+SCDS_URL = "https://character-service-scds.dndbeyond.com/v2/characters"
+POLL_SECONDS = 5
+CHAR_UPDATE_EVENT = "character-sheet/character-update/fulfilled"
+
+
+def character_changed(entity_id):
+    """D&D Beyond reported that this character was saved: read it now instead of waiting for the next poll."""
+    wake = PARTY.get("wake")
+    if entity_id and wake is not None:
+        PARTY["pending"].add(str(entity_id))
+        wake.set()
+
+
+def scds_summaries(ids, cobalt):
+    req = urllib.request.Request(SCDS_URL, data=json.dumps({"characterIds": [int(i) for i in ids]}).encode(), method="POST", headers={
+        "Authorization": f"Bearer {cached_token(cobalt)}", "Content-Type": "application/json", "Accept": "application/json",
+        "User-Agent": UA, "Origin": DDB, "Referer": DDB + "/",
+    })
+    with urllib.request.urlopen(req, timeout=20) as r:
+        body = json.loads(r.read().decode() or "{}")
+    return body.get("foundCharacters") or [], [str(x) for x in body.get("queuedIds") or []], [str(x) for x in body.get("notFoundIds") or []]
+
+
+def summary_to_char(sm):
+    hpi = sm.get("hitPointInfo") or {}
+    ds = sm.get("deathSaveInfo") or {}
+    conds = [(x.get("name") if isinstance(x, dict) else str(x)) for x in sm.get("conditions") or []]
+    return {"entityId": str(sm.get("characterId")), "name": sm.get("name") or "?",
+            "hp": int(hpi.get("current") or 0), "max": int(hpi.get("maximum") or 0), "temp": int(hpi.get("temp") or 0),
+            "dead": int(ds.get("failCount") or 0) >= 3, "stable": int(ds.get("successCount") or 0) >= 3,
+            "conditions": [c for c in conds if c]}
 
 
 def ddb_put(url, payload, cobalt):
@@ -220,10 +253,12 @@ def ddb_put(url, payload, cobalt):
         return json.loads(r.read().decode() or "{}")
 
 
-def apply_hp_change(c, delta, temp):
+def apply_hp_change(c, delta, temp, mx=None):
     """5e rules on D&D Beyond's stored values. delta < 0: damage (temporary HP absorb it first);
-    delta > 0: healing (up to max); temp: set temporary HP. Returns (removedHitPoints, temporaryHitPoints)."""
-    mx = hit_points(c)["max"]
+    delta > 0: healing (up to max); temp: set temporary HP. Returns (removedHitPoints, temporaryHitPoints).
+    mx: D&D Beyond's maximum HP for this character (from its summary); computed only if unknown."""
+    if mx is None:
+        mx = hit_points(c)["max"]
     removed = int(c.get("removedHitPoints") or 0)
     tmp = int(c.get("temporaryHitPoints") or 0)
     if temp is not None:
@@ -250,16 +285,21 @@ async def change_hp(entity_id, delta, temp):
     url = f"https://character-service.dndbeyond.com/character/v5/character/{entity_id}"
     async with HP_LOCK:
         try:
-            c = await asyncio.to_thread(ddb_get, url, cfg["cobalt"])
-            removed, tmp = apply_hp_change(c, delta, temp)
+            c = await asyncio.to_thread(ddb_get, url, cfg["cobalt"])  # authoritative stored values right before writing
+            known = next((x for x in PARTY["chars"] if x["entityId"] == entity_id), None)
+            mx = known["max"] if known and known.get("max") else None
+            removed, tmp = apply_hp_change(c, delta, temp, mx)
             resp = await asyncio.to_thread(ddb_put, HP_URL, {"characterId": int(entity_id), "removedHitPoints": removed,
                                                              "temporaryHitPoints": tmp}, cfg["cobalt"])
             # D&D Beyond answers with the stored values; use them instead of a second read.
             data = (resp or {}).get("data") or {}
             log(f"  stored damage {c.get('removedHitPoints') or 0} / temp {c.get('temporaryHitPoints') or 0} -> sent {removed} / {tmp}; D&D Beyond answered {data}")
-            c["removedHitPoints"] = data.get("removedHitPoints", removed)
-            c["temporaryHitPoints"] = data.get("temporaryHitPoints", tmp)
-            fresh = hit_points(c)
+            removed = int(data.get("removedHitPoints", removed)); tmp = int(data.get("temporaryHitPoints", tmp))
+            if known and mx:
+                fresh = dict(known, hp=max(0, mx - removed), temp=tmp)
+            else:
+                c["removedHitPoints"], c["temporaryHitPoints"] = removed, tmp
+                fresh = hit_points(c)
             PARTY["written"][entity_id] = time.time()
         except urllib.error.HTTPError as e:
             msg = f"D&D Beyond refused the change (HTTP {e.code})"
@@ -277,7 +317,10 @@ async def change_hp(entity_id, delta, temp):
 
 
 async def party_watch(cfg):
-    """Polls the campaign's characters every 20 s and sends their hit points when something changed."""
+    """Keeps the party's hit points current: reads a character right away when D&D Beyond announces a
+    change to it, and reads the whole party in one batch request every few seconds as a safety net."""
+    PARTY["wake"], PARTY["pending"] = asyncio.Event(), set()
+    batch_at = 0.0
     while True:
         try:
             if time.time() - PARTY["roster_at"] > 300 or not PARTY["ids"]:
@@ -285,28 +328,58 @@ async def party_watch(cfg):
                 PARTY["roster_at"] = time.time()
             seen = {r["entityId"] for r in RECENT if r.get("entityType") == "character"}
             ids = list(dict.fromkeys(PARTY["ids"] + sorted(seen)))
-            chars, read_at = [], {}
-            for cid in ids:
+            asked_at, got = time.time(), {}
+            announced = sorted(PARTY["pending"]); PARTY["pending"].clear()
+            # Announced changes: the full character is current within about a second (the batch summary lags ~2 s).
+            for cid in announced:
                 try:
-                    read_at[cid] = time.time()
-                    chars.append(hit_points(await asyncio.to_thread(ddb_get, f"https://character-service.dndbeyond.com/character/v5/character/{cid}", cfg["cobalt"])))
+                    got[cid] = hit_points(await asyncio.to_thread(ddb_get, f"https://character-service.dndbeyond.com/character/v5/character/{cid}", cfg["cobalt"]))
                 except Exception as e:
                     log(f"Could not read character {cid}: {e}")
+            if time.time() - batch_at >= POLL_SECONDS:
+                batch_at = time.time()
+                found, queued, missing = await asyncio.to_thread(scds_summaries, ids, cfg["cobalt"])
+                for sm in found:
+                    ch = summary_to_char(sm)
+                    got.setdefault(ch["entityId"], ch)  # a fresh full read of an announced character wins
+                # D&D Beyond reports these as not (yet) in its summary store: read them in full instead.
+                for cid in queued + missing:
+                    if cid in ids and cid not in got:
+                        try:
+                            got[cid] = hit_points(await asyncio.to_thread(ddb_get, f"https://character-service.dndbeyond.com/character/v5/character/{cid}", cfg["cobalt"]))
+                        except Exception as e:
+                            log(f"Could not read character {cid}: {e}")
             async with HP_LOCK:
-                # A DM edit that landed while this round was reading is newer than what we read: keep it.
                 current = {x["entityId"]: x for x in PARTY["chars"]}
-                chars = [current[x["entityId"]] if PARTY["written"].get(x["entityId"], 0) >= read_at.get(x["entityId"], 0) - 1
-                         and x["entityId"] in current else x for x in chars]
-                chars.sort(key=lambda x: x["name"].lower())
-                if chars != PARTY["chars"]:
+                merged = dict(current)
+                for cid, x in got.items():
+                    # A DM edit that landed while we were asking is newer than what we got: keep it.
+                    if cid in current and PARTY["written"].get(cid, 0) >= asked_at - 1:
+                        continue
+                    # Keep the fresher full read of an announced character over a lagging batch summary.
+                    if cid in current and PARTY["fresh_until"].get(cid, 0) > time.time() and cid not in announced:
+                        continue
+                    if cid in current and "conditions" not in x:  # full reads carry no condition names: keep the known ones
+                        x = dict(x, conditions=current[cid].get("conditions", []))
+                    merged[cid] = x
+                for cid in announced:
+                    PARTY["fresh_until"][cid] = time.time() + 4
+                chars = sorted((merged[c] for c in merged if c in ids or c in got), key=lambda x: x["name"].lower())
+                view = lambda cs: [(c["entityId"], c["name"], c["hp"], c["max"], c["temp"], c["dead"], c["stable"], tuple(c.get("conditions", []))) for c in cs]
+                if view(chars) != view(PARTY["chars"]):
                     PARTY["chars"] = chars
-                    log("Party HP: " + ", ".join(f"{x['name']} {x['hp']}/{x['max']}" + (f"+{x['temp']}" if x["temp"] else "") for x in chars))
+                    log(("Party HP (announced change): " if announced else "Party HP: ") +
+                        ", ".join(f"{x['name']} {x['hp']}/{x['max']}" + (f"+{x['temp']}" if x["temp"] else "") for x in chars))
                     await send_all({"type": "party", "chars": chars})
         except asyncio.CancelledError:
             raise
         except Exception as e:
             log(f"Party HP update failed: {e}")
-        await asyncio.sleep(20)
+        try:  # sleep until the next batch read, or until D&D Beyond announces a change
+            await asyncio.wait_for(PARTY["wake"].wait(), timeout=max(0.5, POLL_SECONDS - (time.time() - batch_at)))
+            PARTY["wake"].clear()
+        except asyncio.TimeoutError:
+            pass
 
 
 # ---------------------------------------------------------------- login window (runs as its own process)
@@ -624,6 +697,10 @@ async def game_log(cfg):
                         continue
                     et = str(m.get("eventType") or "")
                     ent = str(m.get("entityId") or ((m.get("data") or {}).get("context") or {}).get("entityId") or "")
+                    if et == CHAR_UPDATE_EVENT:
+                        cid = str((m.get("data") or {}).get("characterId") or ent)
+                        log(f"D&D Beyond announced a change to character {cid}")
+                        character_changed(cid)
                     if et and et != ROLL_EVENT:
                         if et not in EVENT_TYPES_SEEN:
                             EVENT_TYPES_SEEN.add(et)
