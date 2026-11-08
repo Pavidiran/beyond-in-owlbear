@@ -2,7 +2,7 @@
 // No data layer: D&D Beyond handles everything. This file only sizes, scales and navigates the frame.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
 
-const VERSION = "0.3.0";
+const VERSION = "0.3.1";
 const NS = "com.pavi.beyond-in-owlbear";
 const CFG_KEY = `${NS}/config`;
 const SIZES = { compact: [440, 620], tall: [440, 900], wide: [620, 900] };
@@ -22,7 +22,7 @@ let current = "";
 function go(url) {
   current = url; PREF.last = url; savePref();
   $("frame").src = url;
-  hint("");
+  hint(""); cookieWarned = false; cookieCheck(); // keep the cookie warning if it still applies
 }
 function hint(t) { $("hint").textContent = t; $("hint").hidden = !t; }
 
@@ -73,6 +73,25 @@ function signIn() {
   }, 1500);
 }
 
+// Firefox and Safari give a framed site its own empty cookie jar, so the framed sheet stays logged
+// out. Their automatic exception only applies when the framed site itself opens the sign-in pop-up
+// (D&D Beyond never does), so the player has to allow cross-site cookies for Owlbear once.
+// hasStorageAccess() tells us whether that is currently the case for this top-level site, so the
+// warning shows only while it is needed and disappears by itself once the exception is set.
+let cookieWarned = false;
+async function cookieCheck() {
+  let ok = true;
+  try { if (window.top !== window && document.hasStorageAccess) ok = await document.hasStorageAccess(); } catch {}
+  if (ok) { if (cookieWarned) { cookieWarned = false; hint(""); } return; }
+  const ua = navigator.userAgent;
+  const msg = /Firefox\//.test(ua)
+    ? "Firefox blocks cross-site cookies here, so the sheet stays logged out. One-time fix: click the shield icon left of the address bar and turn off Enhanced Tracking Protection for owlbear.rodeo."
+    : /Safari\//.test(ua) && !/Chrome\//.test(ua)
+      ? "Safari blocks cross-site cookies here, so the sheet stays logged out. One-time fix: Settings → Privacy → turn off \"Prevent cross-site tracking\"."
+      : "This browser blocks third-party cookies here, so the sheet stays logged out. Allow them for owlbear.rodeo (Chrome: the eye icon at the right of the address bar), then reload.";
+  cookieWarned = true; hint(msg);
+}
+
 async function saveConfig(fn) {
   const m = (await OBR.room.getMetadata()) || {};
   const cfg = JSON.parse(JSON.stringify(m[CFG_KEY] || { campaignUrl: "" }));
@@ -111,12 +130,8 @@ async function start() {
   }
   renderBar(); layout(); await applySize();
   go(PREF.last && PREF.last.startsWith(DDB + "/") ? PREF.last : HOME);
-  // Firefox and Safari give a framed site its own empty cookie jar. Their automatic exception only
-  // applies when the framed site itself opens the sign-in pop-up (D&D Beyond never does), so the
-  // player has to allow cross-site cookies for Owlbear once. Chrome/Edge share cookies by default.
-  const ua = navigator.userAgent;
-  if (/Firefox\//.test(ua)) hint("Firefox, one-time setup: click the shield icon left of the address bar and turn off Enhanced Tracking Protection for owlbear.rodeo. Then use Sign in here. Without it the sheet stays logged out and cannot roll.");
-  else if (/Safari\//.test(ua) && !/Chrome\//.test(ua)) hint("Safari, one-time setup: Settings → Privacy → turn off \"Prevent cross-site tracking\". Then use Sign in here. Without it the sheet stays logged out and cannot roll.");
+  await cookieCheck();
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") cookieCheck(); });
   document.body.addEventListener("click", (ev) => { const el = ev.target.closest("[data-act]"); if (el) onAction(el.dataset.act).catch((e) => hint(e.message)); });
   document.title = `Beyond in Owlbear v${VERSION}`;
 }

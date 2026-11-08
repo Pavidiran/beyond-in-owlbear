@@ -25,7 +25,8 @@ https://pavidiran.github.io/beyond-in-owlbear/manifest.json
   only applies when the framed site itself opens the pop-up, which D&D Beyond never does. Those
   players do a one-time step: Firefox → shield icon left of the address bar → turn off Enhanced
   Tracking Protection for owlbear.rodeo; Safari → Privacy → turn off "Prevent cross-site tracking".
-  Chrome and Edge need nothing. (Verified 2026-11-08; `test/depth.html` reproduces it.)
+  Chrome and Edge need nothing. The panel checks the browser's cross-site cookie access and shows the
+  instruction only while it is actually blocked. (Verified 2026-11-08; `test/depth.html` reproduces it.)
 - Rolls made with D&D Beyond's own dice stay in that player's sheet. Use a dice extension such as
   Dice+ for rolls the whole table should see.
 
