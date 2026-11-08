@@ -87,3 +87,9 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .toast { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: 90%; z-index: 20;
   background: var(--bg2); color: var(--fg); border: 1px solid var(--accent); border-radius: 8px; padding: 6px 10px;
   font-size: 12px; box-shadow: 0 4px 14px rgba(0,0,0,.35); pointer-events: none; }
+
+/* character picker shown over the frame */
+.picker { position: absolute; inset: 0; z-index: 5; background: var(--bg); padding: 12px; overflow-y: auto; display: grid; align-content: start; gap: 6px; }
+.picker .ptitle { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+.picker button.pick { display: flex; align-items: center; gap: 8px; justify-content: space-between; padding: 8px 10px; text-align: left; font-size: 13px; }
+.picker .pother { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }

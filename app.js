@@ -2,9 +2,9 @@
 // the shared roll log and battle tracker. D&D Beyond handles the sheets; the rolls arrive through
 // Beyond Relay on the DM's computer (see bg.js), initiative rolls fill the battle tracker.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
-import { NS, KEYS, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode } from "./shared.js?v=0.6.4";
+import { NS, KEYS, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode } from "./shared.js?v=0.6.5";
 
-const VERSION = "0.6.4";
+const VERSION = "0.6.5";
 const SIZES = { compact: [440, 620], tall: [440, 900], wide: [620, 900] };
 const DDB = "https://www.dndbeyond.com";
 const HOME = `${DDB}/characters`; // "My characters": each player picks their own sheet there
@@ -37,13 +37,14 @@ const battle = () => META[KEYS.battle] || emptyBattle();
 const parseCampaign = (t) => { const m = String(t || "").match(/campaigns\/(\d{3,})/); return m ? `${DDB}/campaigns/${m[1]}` : ""; };
 
 // ------------------------------------------------------------------ sheet frame
-// The frame is cross-origin, so the browser never tells us its address. We only know the page we
-// opened ourselves; a full page load well after that means the player navigated inside D&D Beyond.
-let current = "", openedAt = 0, wandered = false;
-const sheetId = () => (!wandered && (current.match(/\/characters\/(\d+)/) || [])[1]) || "";
+// The frame is cross-origin, so the browser never tells us its address: we only know the page we
+// opened ourselves.
+let current = "";
+// The sheet the panel opened (from the picker). After a DM edit it is reloaded even if the player
+// clicked elsewhere inside D&D Beyond meanwhile: that brings them back to their sheet with fresh values.
+const sheetId = () => (current.match(/\/characters\/(\d+)/) || [])[1] || "";
 function go(url) {
   current = url; PREF.last = url; savePref();
-  openedAt = Date.now(); wandered = false;
   $("frame").src = url;
   hint(""); cookieWarned = false; cookieCheck(); // keep the cookie warning if it still applies
 }
@@ -266,19 +267,31 @@ function renderDrawer() {
       <span class="last" title="${esc(last)}">${esc(last || rs.text)}</span></div>${body}`;
   restoreFocus(keep);
 }
-function renderAll() { renderBar(); renderDrawer(); }
+function renderPicker() {
+  const el = $("picker"); if (el.hidden) return;
+  const ps = party();
+  const camp = config().campaignUrl;
+  el.innerHTML = `<div class="ptitle">Open a character sheet</div>` +
+    (ps.length ? ps.map((p) => `<button class="pick" data-act="openChar" data-id="${esc(p.entityId)}"><span>${esc(p.name)}</span>${hpBadge(p)}</button>`).join("")
+      : `<div class="muted">The campaign's characters appear here while the DM's Beyond Relay is running.</div>`) +
+    `<div class="pother"><button class="ghost" data-act="ddbHome">My characters on D&amp;D Beyond</button>${camp ? `<button class="ghost" data-act="campaign">Campaign page</button>` : ""}</div>` +
+    `<div class="muted">Sheets opened from this list reload by themselves when the DM changes their HP.</div>`;
+}
+function showPicker(on) { $("picker").hidden = !on; renderPicker(); }
+function renderAll() { renderBar(); renderDrawer(); renderPicker(); }
 
 // ------------------------------------------------------------------ actions
 async function onAction(act, el) {
   const ds = el.dataset;
   switch (act) {
-    case "home": go(HOME); break;
-    case "campaign": if (config().campaignUrl) go(config().campaignUrl); break;
+    case "home": if (party().length) showPicker(true); else go(HOME); break;
+    case "ddbHome": showPicker(false); go(HOME); break;
+    case "campaign": if (config().campaignUrl) { showPicker(false); go(config().campaignUrl); } break;
     case "login": signIn(); break;
     case "zoomOut": PREF.zoom = Math.max(0.5, +(PREF.zoom - 0.05).toFixed(2)); savePref(); layout(); break;
     case "zoomIn": PREF.zoom = Math.min(1.2, +(PREF.zoom + 0.05).toFixed(2)); savePref(); layout(); break;
     case "size": PREF.size = PREF.size === "compact" ? "tall" : PREF.size === "tall" ? "wide" : "compact"; savePref(); layout(); await applySize(); break;
-    case "openChar": go(`${DDB}/characters/${ds.id}`); break;
+    case "openChar": showPicker(false); go(`${DDB}/characters/${ds.id}`); break;
     case "tab": window.open(current, "_blank"); break;
     case "gm": $("campaign").value = config().campaignUrl; $("relayCode").value = config().relayCode || ""; $("gm").hidden = !$("gm").hidden; break;
     case "gmClose": $("gm").hidden = true; break;
@@ -367,9 +380,9 @@ async function start() {
       clearTimeout(refreshT); refreshT = setTimeout(() => go(current), 1500); // one reload after a burst of clicks
     }
   });
-  $("frame").addEventListener("load", () => { if (Date.now() - openedAt > 6000) wandered = true; });
   renderAll(); layout(); await applySize();
-  go(PREF.last && PREF.last.startsWith(DDB + "/") ? PREF.last : HOME);
+  if (/\/characters\/\d+/.test(PREF.last || "")) go(PREF.last);
+  else { go(HOME); if (party().length) showPicker(true); }
   await cookieCheck();
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") cookieCheck(); });
   setInterval(renderDrawer, 60000); // relay staleness indicator

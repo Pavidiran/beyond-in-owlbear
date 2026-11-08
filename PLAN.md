@@ -148,3 +148,10 @@ refetch, and its message broker only handles "character-sheet/item-shared/fulfil
 party inventory). Game-log types present: dice/roll/{pending,fulfilled,rejected}, dice/set/update,
 map/activate/fulfilled. => No signal makes an open sheet re-read HP; only a reload does. The panel
 auto-reloads sheets it opened itself (party-list names); "My characters" flow needs ↻ + pick.
+
+## v0.6.5 (2026-11-08): character list instead of "My characters"
+Why: a sheet reached through D&D Beyond's own links is invisible to the panel (cross-origin), so it can't be
+reloaded after a DM HP edit, and a player acting on stale HP can overwrite the DM's change. ↻ now shows the
+campaign's characters (relay roster); the panel opens the picked sheet itself, remembers it, and reloads it
+after any DM edit to that character, even if the player clicked elsewhere inside D&D Beyond (user's call).
+Players may open any listed sheet; editing still needs the owner's D&D Beyond login.
