@@ -11,12 +11,12 @@ https://pavidiran.github.io/beyond-in-owlbear/manifest.json
 
 ## How it works
 
-- The DM pastes each character's D&D Beyond link into the extension's panel once per room.
-- Anyone clicks **Open sheet** and the sheet opens in a large window inside Owlbear.
-- Players click **Sign in** inside that window to log into D&D Beyond (a pop-up, because D&D Beyond
-  refuses to show its login page inside a frame). After that they can edit HP, spells, etc. as usual.
-- Sheets must be **Public** in D&D Beyond (character → Edit → Home → Character Privacy) so they can
-  be viewed before signing in.
+- The panel shows the real D&D Beyond page, in D&D Beyond's own mobile layout, scaled down and with
+  the site header cropped away. Nothing is translated or re-implemented.
+- Toolbar: home (campaign page), character picker, Sign in (pop-up), zoom, hide site header,
+  panel size (compact / tall / wide), reload, open in a browser tab, and DM room settings.
+- The DM pastes the campaign link and optionally character links once per room. Players need
+  nothing installed; they sign in inside the panel to edit their own character.
 
 ## Limits
 

@@ -13,7 +13,32 @@ as it is for the current campaign.
   which needs a server holding the DM's session cookie (ToS grey area).
 - Firefox/Safari isolate third-party cookies: the framed sheet may stay logged out there.
 
-## Architecture
+## Revision 2026-11-08 (after testing v0.1 in a room)
+The framed D&D Beyond page is too big and shows everything; a compact panel like the Stormwreck
+one is wanted, and characters should come from the campaign, not from pasted links. Both need
+character data, and only the DM's login can read the campaign, so the relay becomes the data
+source for everything. D&D Beyond stays the source of truth; Owlbear shows a compact view of it.
+
+Data flow:
+1. **Relay** (Python, runs on the DM's PC during sessions, DM cookie + campaign id):
+   reads the campaign roster, pulls each character's full data (refreshes every ~15 s and when
+   a game-log event arrives), reduces it to a compact sheet (~2 KB), listens to the game log for
+   rolls, and later applies HP/slot changes back to D&D Beyond.
+2. **DM background page** (manifest `background_url`, runs whenever the DM's Owlbear tab is open):
+   connects to the relay on localhost, keeps the compact sheets, writes a tiny per-character
+   summary (name, HP, AC, initiative, level) plus battle and roll log into room metadata (16 KB
+   cap), and broadcasts full sheets to players on change and on request.
+3. **Panel** (everyone, action popover): compact sheet like the Stormwreck one: vitals, saves,
+   skills, attacks, features, spells, battle tracker, roll log. Rolls go through Dice+ (with the
+   internal fallback) exactly as before. HP changes are sent to the DM page → relay → D&D Beyond.
+   Rolls players make inside D&D Beyond also appear (via the game log); initiative rolls, from
+   either side, put the character in the battle tracker.
+   "Open full sheet" keeps the v0.1 framed window for inventory, backstory etc.
+
+Consequences: players need nothing installed; fresh data only flows while the DM's Owlbear tab
+and the relay are running (players keep the last copy they saw, marked with its age).
+
+## Architecture (v0.1, superseded above)
 Separate static extension, own repo + GitHub Pages, deployed with git like the other one.
 
 1. **Popover (roster)** — per-room list of characters stored in room metadata.

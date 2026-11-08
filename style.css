@@ -1,32 +1,24 @@
 :root { color-scheme: dark; --bg: #1f1f23; --bg2: #2a2a30; --bg3: #35353d; --fg: #eee; --fg2: #a9a9b3; --line: #44444d; --accent: #8b5cf6; --warn: #f59e0b; }
 [data-theme="light"] { color-scheme: light; --bg: #f6f6f8; --bg2: #fff; --bg3: #ececf1; --fg: #1d1d22; --fg2: #5c5c66; --line: #d9d9e0; }
 * { box-sizing: border-box; }
-html, body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
-#app { padding: 10px 12px 14px; }
-h1 { font-size: 16px; margin: 0 0 8px; }
-h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--fg2); margin: 14px 0 6px; }
-button, input { font: inherit; color: inherit; }
-button { background: var(--bg3); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 12px/1.3 system-ui, -apple-system, "Segoe UI", sans-serif; }
+body { display: flex; flex-direction: column; overflow: hidden; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { background: var(--bg3); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; cursor: pointer; }
 button:hover { border-color: var(--accent); }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-button.sm { padding: 3px 7px; font-size: 12px; }
 button.ghost { background: transparent; }
-button:disabled { opacity: .5; cursor: default; }
-input[type="text"] { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; width: 100%; }
-.card { background: var(--bg2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; }
-.row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
-.row:last-child { border-bottom: 0; }
-.row .nm { flex: 1; min-width: 0; }
-.row .nm small { display: block; color: var(--fg2); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.muted { color: var(--fg2); font-size: 12px; }
-.notice { background: var(--bg3); border-left: 3px solid var(--accent); padding: 6px 8px; border-radius: 6px; margin: 8px 0; font-size: 12px; }
-.notice.warn { border-color: var(--warn); }
-.add { display: grid; gap: 6px; }
-.add .two { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
-.loading { color: var(--fg2); padding: 20px; text-align: center; }
-.foot { font-size: 10px; color: var(--fg2); text-align: right; margin-top: 10px; }
-/* sheet viewer (modal) */
-body.viewer { height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
-.bar { display: flex; align-items: center; gap: 6px; padding: 6px 8px; background: var(--bg2); border-bottom: 1px solid var(--line); flex: none; }
-.bar .ttl { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.frame { flex: 1; border: 0; width: 100%; background: #fff; }
+button.ic { padding: 2px 7px; min-width: 26px; }
+button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.bar { display: flex; align-items: center; gap: 4px; padding: 4px 6px; background: var(--bg2); border-bottom: 1px solid var(--line); flex: none; }
+.bar .spacer { flex: 1; }
+.bar .z { color: var(--fg2); min-width: 30px; text-align: center; font-size: 11px; }
+.bar select { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; max-width: 130px; }
+.hint { background: var(--bg3); border-left: 3px solid var(--warn); padding: 4px 8px; font-size: 11px; flex: none; }
+.gm { background: var(--bg2); border-bottom: 1px solid var(--line); padding: 8px; display: grid; gap: 6px; flex: none; }
+.gm label { display: grid; gap: 3px; }
+.gm input[type="text"], .gm textarea { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; width: 100%; font-size: 11px; }
+.gm .row { display: flex; gap: 6px; }
+.muted { color: var(--fg2); font-size: 11px; }
+.wrap { flex: 1; position: relative; overflow: hidden; background: #fff; }
+.wrap iframe { position: absolute; left: 0; border: 0; transform-origin: 0 0; }

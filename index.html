@@ -5,10 +5,32 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Beyond in Owlbear</title>
   <link rel="icon" href="icon.svg">
-  <link rel="stylesheet" href="style.css?v=0.1.0">
+  <link rel="stylesheet" href="style.css?v=0.2.0">
 </head>
 <body>
-  <div id="app"><div class="loading">Connecting to Owlbear…</div></div>
-  <script type="module" src="app.js?v=0.1.0"></script>
+  <div class="bar" id="bar">
+    <button class="ic" data-act="home" title="Campaign / home page">⌂</button>
+    <select id="chars" data-act="pick" title="Characters in this room" hidden></select>
+    <span class="spacer"></span>
+    <button class="ic" data-act="login" title="Sign in to D&D Beyond (pop-up), then the page reloads">Sign in</button>
+    <button class="ic" data-act="zoomOut" title="Smaller">−</button>
+    <span class="z" id="zoomLbl">80%</span>
+    <button class="ic" data-act="zoomIn" title="Larger">+</button>
+    <button class="ic" data-act="crop" id="cropBtn" title="Hide D&D Beyond's site header">▲</button>
+    <button class="ic" data-act="size" id="sizeBtn" title="Panel size: compact / tall / wide">⤢</button>
+    <button class="ic" data-act="reload" title="Reload">↻</button>
+    <button class="ic" data-act="tab" title="Open in a browser tab">↗</button>
+    <button class="ic" data-act="gm" id="gmBtn" title="Room settings (DM)" hidden>⚙</button>
+  </div>
+  <div class="hint" id="hint" hidden></div>
+  <div class="gm" id="gm" hidden>
+    <label>Campaign link <input type="text" id="campaign" placeholder="https://www.dndbeyond.com/campaigns/1234567"></label>
+    <label>Character links, one per line, optional: <small>name | link</small>
+      <textarea id="links" rows="4" placeholder="Arthur | https://www.dndbeyond.com/characters/123456789"></textarea></label>
+    <div class="row"><button data-act="gmSave">Save for this room</button><button class="ghost" data-act="gmClose">Close</button></div>
+    <div class="muted">Characters must be <b>Public</b> in D&D Beyond (character → Edit → Home → Character Privacy) to show before sign-in.</div>
+  </div>
+  <div class="wrap" id="wrap"><iframe id="frame" allow="clipboard-write" referrerpolicy="no-referrer-when-downgrade"></iframe></div>
+  <script type="module" src="app.js?v=0.2.0"></script>
 </body>
 </html>
