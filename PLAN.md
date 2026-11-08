@@ -169,3 +169,16 @@ Players may open any listed sheet; editing still needs the owner's D&D Beyond lo
 - Cheap change marker also exists: character/v5/characters/list?userId=X (~660 B gzip, any campaign
   member readable with the DM session) has lastModifiedDate == character dateModified, which moves on
   every HP change (DM write, temp HP, sheet edit; verified to the second).
+
+## Next session (noted 2026-11-08, end of day)
+State: extension v0.7.0 and relay 0.9.0 live and working (user confirmed fast HP sync).
+1. Monster quick-load ("grimoire"): load a monster's stats (HP, AC, initiative bonus, maybe attacks)
+   into the battle tracker in one step instead of typing them. Check existing options first
+   (e.g. D&D Beyond's monster service via the relay, or an existing Owlbear extension).
+2. Monster tab: roll monster attacks, saves and damage from the panel.
+3. Polish: make the extension's roll log and the relay window nicer to look at, and remove
+   buttons that aren't needed (to clarify with the user which ones; relay candidates: "Paste
+   cookie instead...", the separate "Save & connect"). Also ask whether "log" meant logo/icon.
+4. Music per map: check existing Owlbear extensions first; otherwise a separate extension.
+Known open issue: a player acting in a stale sheet can overwrite a DM HP edit (mitigated by
+auto-reload of sheets opened from the character list).
