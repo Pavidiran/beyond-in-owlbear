@@ -1,0 +1,58 @@
+name: Build relay
+
+# Builds a single-file Beyond Relay program for Windows, macOS and Linux and attaches
+# them to a GitHub release. Trigger: push a tag like relay-v0.1.0.
+on:
+  push:
+    tags: ["relay-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: beyond-relay-windows.exe
+            built: dist/beyond-relay.exe
+          - os: macos-latest
+            artifact: beyond-relay-macos
+            built: dist/beyond-relay
+          - os: ubuntu-latest
+            artifact: beyond-relay-linux
+            built: dist/beyond-relay
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r relay/requirements.txt pyinstaller
+      - run: pyinstaller --onefile --name beyond-relay --console relay/relay.py
+      - run: mv "${{ matrix.built }}" "${{ matrix.artifact }}"
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          body: |
+            Beyond Relay: run it on the DM's computer during the session to show D&D Beyond rolls in Owlbear.
+            Windows: download beyond-relay-windows.exe and double-click it (SmartScreen: "More info" → "Run anyway").
+            macOS: download beyond-relay-macos, run `chmod +x beyond-relay-macos` once, then right-click → Open.
+            Linux: download beyond-relay-linux, `chmod +x`, run it.
+            First start asks for your campaign link and your D&D Beyond session cookie.
