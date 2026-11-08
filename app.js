@@ -2,7 +2,7 @@
 // No data layer: D&D Beyond handles everything. This file only sizes, scales, crops and navigates the frame.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
 
-const VERSION = "0.2.1";
+const VERSION = "0.2.2";
 const NS = "com.pavi.beyond-in-owlbear";
 const CFG_KEY = `${NS}/config`;
 const SITE_HEADER_PX = 68; // height of dndbeyond.com's top bar in its mobile layout
@@ -58,8 +58,16 @@ function signIn() {
   const ret = current.startsWith("https://www.dndbeyond.com") ? current.slice("https://www.dndbeyond.com".length) : "/characters";
   const w = window.open("https://www.dndbeyond.com/sign-in?returnUrl=" + encodeURIComponent(ret), "ddb-signin", "width=560,height=760");
   if (!w) { hint("Pop-ups are blocked. Allow them for this site, or sign in via ↗ and come back."); return; }
-  hint("Finish signing in in the pop-up. The panel reloads when it closes.");
-  const t = setInterval(() => { if (w.closed) { clearInterval(t); go(current); } }, 700);
+  hint("Finish signing in in the pop-up, then come back here. The panel reloads by itself.");
+  // Reload when the pop-up closes, or as soon as the player returns to Owlbear (the pop-up may
+  // have opened as a tab that stays open). Firefox grants the signed-in cookies to the frame
+  // only after the player interacted with that pop-up, so the reload must come after it.
+  let done = false;
+  const finish = () => { if (done) return; done = true; clearInterval(t); window.removeEventListener("focus", onBack); document.removeEventListener("visibilitychange", onVis); go(current); };
+  const onBack = () => setTimeout(finish, 300);
+  const onVis = () => { if (document.visibilityState === "visible") onBack(); };
+  const t = setInterval(() => { if (w.closed) finish(); }, 700);
+  setTimeout(() => { window.addEventListener("focus", onBack); document.addEventListener("visibilitychange", onVis); }, 1500);
 }
 
 async function saveConfig(fn) {
@@ -112,8 +120,8 @@ async function start() {
   // Firefox and Safari isolate third-party cookies, so the framed sheet stays logged out
   // until the player allows cross-site cookies for Owlbear. Chrome/Edge allow them by default.
   const ua = navigator.userAgent;
-  if (/Firefox\//.test(ua)) hint("Firefox: click the shield icon left of the address bar, turn off Enhanced Tracking Protection for owlbear.rodeo, reload, then use Sign in here. Otherwise the sheet stays logged out and cannot roll.");
-  else if (/Safari\//.test(ua) && !/Chrome\//.test(ua)) hint("Safari: Settings → Privacy → turn off \"Prevent cross-site tracking\", then use Sign in here. Otherwise the sheet stays logged out and cannot roll.");
+  if (/Firefox\//.test(ua)) hint("Firefox: use the Sign in button here (not the one inside the sheet). If the sheet still stays logged out afterwards: shield icon left of the address bar → turn off Enhanced Tracking Protection for owlbear.rodeo.");
+  else if (/Safari\//.test(ua) && !/Chrome\//.test(ua)) hint("Safari: use the Sign in button here. If the sheet stays logged out afterwards: Settings → Privacy → turn off \"Prevent cross-site tracking\".");
   document.body.addEventListener("click", (ev) => { const el = ev.target.closest("[data-act]"); if (el && el.tagName !== "SELECT") onAction(el.dataset.act, el).catch((e) => hint(e.message)); });
   $("chars").addEventListener("change", (ev) => onAction("pick", ev.target));
   document.title = `Beyond in Owlbear v${VERSION}`;
