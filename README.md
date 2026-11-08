@@ -12,8 +12,8 @@ https://pavidiran.github.io/beyond-in-owlbear/manifest.json
 ## How it works
 
 - The panel shows the real D&D Beyond page, in D&D Beyond's own mobile layout, scaled down. Nothing is translated or re-implemented.
-- Toolbar: ⌂ My characters, Campaign (if the DM set a campaign link), Sign in (pop-up), zoom,
-  panel size (compact / tall / wide), reload, open in a browser tab, DM room settings.
+- Toolbar: ↻ reload (back to My characters), Campaign (if the DM set a campaign link), Sign in (pop-up), zoom,
+  panel size (compact / tall / wide), open in a browser tab, DM room settings.
 - Players open their own sheet from D&D Beyond's "My characters" page after signing in. The DM can
   add the campaign link once per room so everyone gets a Campaign button.
 
