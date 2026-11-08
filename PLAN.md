@@ -140,3 +140,11 @@ Verified with the user's OK: the DM's session may write HP to a character owned 
 temporaryHitPoints} — temporaryHitPoints is required). Panel (DM) → LOCAL broadcast → bg → relay ws
 {type:"hp"} → relay re-reads, applies 5e rules (temp HP soaks damage, clamp 0..max), writes, re-reads,
 pushes party update. Only characters of the campaign are accepted.
+
+## Finding 2026-11-08: open D&D Beyond sheets cannot be live-updated
+Checked the character-app bundle (media.dndbeyond.com/character-app, main.*.js): the sheet loads the
+character once on mount (characterLoadRequest guarded by a one-shot state), has no focus/interval
+refetch, and its message broker only handles "character-sheet/item-shared/fulfilled" (re-requests the
+party inventory). Game-log types present: dice/roll/{pending,fulfilled,rejected}, dice/set/update,
+map/activate/fulfilled. => No signal makes an open sheet re-read HP; only a reload does. The panel
+auto-reloads sheets it opened itself (party-list names); "My characters" flow needs ↻ + pick.
