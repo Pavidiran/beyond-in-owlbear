@@ -4,7 +4,7 @@
 // plus a secret, set in the panel's settings), writes every D&D Beyond roll into the room's roll log,
 // puts characters into the battle tracker when they roll initiative, and keeps the relay status in the room.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
-import { NS, KEYS, LOG_MAX, uid, campaignIdOf, flattenRoll, sortEntries, emptyBattle, describe, relayUrl } from "./shared.js?v=0.4.1";
+import { NS, KEYS, LOG_MAX, uid, campaignIdOf, flattenRoll, sortEntries, emptyBattle, describe, relayUrl } from "./shared.js?v=0.5.0";
 
 let role = "PLAYER", ws = null, wsUrl = "", relayCampaign = "", retry = null, lastRelay = "", beat = null;
 
@@ -38,6 +38,15 @@ async function onRoll(roll, replay = false) {
   if (!replay) OBR.broadcast.sendMessage(`${NS}/roll`, fresh, { destination: "ALL" }).catch(() => {});
 }
 
+async function onParty(chars) {
+  const m = await meta();
+  const wanted = campaignIdOf((m[KEYS.cfg] || {}).campaignUrl);
+  if (wanted && relayCampaign && wanted !== relayCampaign) return;
+  const old = m[KEYS.party] || {};
+  if (JSON.stringify(old.chars || []) === JSON.stringify(chars || [])) return;
+  await OBR.room.setMetadata({ [KEYS.party]: { chars: chars || [], t: Date.now() } });
+}
+
 function schedule() { clearTimeout(retry); retry = setTimeout(connect, 5000); }
 
 async function connect() {
@@ -59,6 +68,9 @@ async function connect() {
         lastRelay = ""; await writeRelay(!!msg.connected, msg.connected ? "" : "Beyond Relay is running but not connected to D&D Beyond");
         const recent = (msg.recent || []).filter((r) => Date.now() - (r.t || 0) < 10 * 60 * 1000);
         for (const r of recent) await onRoll(r, true);
+        if (Array.isArray(msg.party) && msg.party.length) await onParty(msg.party);
+      } else if (msg.type === "party") {
+        await onParty(msg.chars);
       } else if (msg.type === "status") {
         if (msg.campaignId) relayCampaign = String(msg.campaignId);
         await writeRelay(!!msg.connected, msg.error || "");

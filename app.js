@@ -2,9 +2,9 @@
 // the shared roll log and battle tracker. D&D Beyond handles the sheets; the rolls arrive through
 // Beyond Relay on the DM's computer (see bg.js), initiative rolls fill the battle tracker.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
-import { NS, KEYS, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode } from "./shared.js?v=0.4.1";
+import { NS, KEYS, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode } from "./shared.js?v=0.5.0";
 
-const VERSION = "0.4.1";
+const VERSION = "0.5.0";
 const SIZES = { compact: [440, 620], tall: [440, 900], wide: [620, 900] };
 const DDB = "https://www.dndbeyond.com";
 const HOME = `${DDB}/characters`; // "My characters": each player picks their own sheet there
@@ -165,6 +165,22 @@ function renderLog() {
   }).join("");
 }
 
+// Party hit points come from D&D Beyond through the relay (read-only; players change HP in their own sheet).
+const party = () => (META[KEYS.party] || {}).chars || [];
+const pcHp = (entityId) => party().find((p) => p.entityId === String(entityId));
+function hpBadge(p) {
+  if (!p) return "";
+  const pct = p.max ? Math.max(0, Math.min(100, Math.round((100 * p.hp) / p.max))) : 0;
+  const cls = p.dead ? "dead" : p.hp <= 0 ? "zero" : pct <= 33 ? "low" : pct <= 66 ? "mid" : "ok";
+  const txt = p.dead ? "dead" : p.hp <= 0 ? (p.stable ? "0 · stable" : "0 · dying") : `${p.hp}/${p.max}`;
+  return `<span class="php ${cls}" title="${esc(p.name)}: ${p.hp}/${p.max}${p.temp ? ` +${p.temp} temp` : ""}"><span class="hbar"><i style="width:${pct}%"></i></span>${txt}${p.temp ? `<span class="tmp">+${p.temp}</span>` : ""}</span>`;
+}
+function renderParty() {
+  const ps = party();
+  if (!ps.length) return "";
+  return `<div class="party">${ps.map((p) => `<div class="prow"><span class="pn">${esc(p.name)}</span>${hpBadge(p)}</div>`).join("")}</div>`;
+}
+
 function renderBattle() {
   const b = battle(), isGM = ME.role === "GM";
   const rows = b.entries.map((e, i) => {
@@ -175,6 +191,7 @@ function renderBattle() {
       hp = `<span class="bhp"><button class="sm" data-act="bHp" data-id="${e.id}" data-v="-1">−</button><input type="number" data-field="bhp:${e.id}" value="${e.hp}"><button class="sm" data-act="bHp" data-id="${e.id}" data-v="1">+</button><span class="muted">/${e.maxHp}</span></span>
             <input type="number" class="dmg" data-field="bdmg:${e.id}" placeholder="dmg" title="Type damage, press Enter">`;
     } else if (down) hp = `<span class="muted">down</span>`;
+    else if (e.kind === "pc") hp = hpBadge(pcHp(e.entityId));
     return `<div class="brow${cur ? " cur" : ""}${down ? " down" : ""}${e.kind === "pc" ? " pc" : ""}"${isGM ? ` data-act="bSetTurn" data-i="${i}"` : ""}>
       <span class="mk">${cur ? "▶" : ""}</span><span class="bi">${init}</span><span class="bn">${esc(e.name)}</span>${hp}
       ${isGM ? `<button class="ic ghost" data-act="bRemove" data-id="${e.id}" title="Remove">×</button>` : ""}</div>`;
@@ -195,7 +212,7 @@ function renderBattle() {
       <input type="number" id="bCount" placeholder="×1" min="1" max="30">
       <button data-act="bAdd">Add</button></div>`
     : `<div class="muted pad">Round ${b.round || 1}${now ? ` · ${esc(now.name)}'s turn` : ""}</div>`;
-  return rows + empty + ctrl;
+  return renderParty() + rows + empty + ctrl;
 }
 
 function renderDrawer() {

@@ -39,7 +39,7 @@ for _s in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code
     except Exception:
         pass
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 DDB = "https://www.dndbeyond.com"
 AUTH_URL = "https://auth-service.dndbeyond.com/v1/cobalt-token"
 WS_URL = "wss://game-log-api-live.dndbeyond.com/v1"
@@ -119,6 +119,109 @@ def fetch_token(cobalt):
     payload += "=" * (-len(payload) % 4)
     claims = json.loads(base64.urlsafe_b64decode(payload).decode())
     return token, ttl, str(claims.get(NAMEID_CLAIM) or "")
+
+
+# ---------------------------------------------------------------- party hit points (read-only)
+_TOKEN_CACHE = {"token": "", "until": 0.0}
+
+
+def cached_token(cobalt):
+    if time.time() < _TOKEN_CACHE["until"]:
+        return _TOKEN_CACHE["token"]
+    token, ttl, _ = fetch_token(cobalt)
+    _TOKEN_CACHE.update(token=token, until=time.time() + ttl - 30)
+    return token
+
+
+def ddb_get(url, cobalt):
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {cached_token(cobalt)}", "Cookie": f"CobaltSession={cobalt}",
+        "User-Agent": UA, "Accept": "application/json", "Referer": DDB + "/",
+    })
+    with urllib.request.urlopen(req, timeout=20) as r:
+        body = json.loads(r.read().decode())
+    return body.get("data", body) if isinstance(body, dict) else body
+
+
+def campaign_character_ids(cfg):
+    """IDs of the active characters in the campaign (the DM's session can read this)."""
+    data = ddb_get(f"{DDB}/api/campaign/stt/active-short-characters/{cfg['campaignId']}", cfg["cobalt"])
+    items = data if isinstance(data, list) else (data or {}).get("characters") or []
+    ids = []
+    for it in items:
+        cid = it.get("id") or it.get("characterId") if isinstance(it, dict) else None
+        if cid:
+            ids.append(str(cid))
+    return ids
+
+
+def ability_score(c, stat_id, sub_type):
+    over = next((s.get("value") for s in c.get("overrideStats") or [] if s.get("id") == stat_id), None)
+    if over is not None:
+        return over
+    score = next((s.get("value") for s in c.get("stats") or [] if s.get("id") == stat_id), None) or 10
+    score += next((s.get("value") for s in c.get("bonusStats") or [] if s.get("id") == stat_id), None) or 0
+    sets = []
+    for lst in (c.get("modifiers") or {}).values():
+        for m in lst or []:
+            if m.get("subType") == sub_type and m.get("type") == "bonus" and isinstance(m.get("value"), (int, float)):
+                score += m["value"]
+            elif m.get("subType") == sub_type and m.get("type") == "set" and isinstance(m.get("value"), (int, float)):
+                sets.append(m["value"])  # e.g. Amulet of Health
+    return max([score] + sets)
+
+
+def hit_points(c):
+    """Same numbers the D&D Beyond sheet shows: current / max (+ temporary)."""
+    level = sum(int(x.get("level") or 0) for x in c.get("classes") or []) or 1
+    if c.get("overrideHitPoints") is not None:
+        mx = int(c["overrideHitPoints"])
+    else:
+        con_mod = (ability_score(c, 3, "constitution-score") - 10) // 2
+        mx = int(c.get("baseHitPoints") or 0) + int(c.get("bonusHitPoints") or 0) + con_mod * level
+        for lst in (c.get("modifiers") or {}).values():
+            for m in lst or []:
+                if m.get("type") != "bonus" or not isinstance(m.get("value"), (int, float)) or m.get("dice"):
+                    continue  # dice-based "hit-points" entries are healing potions etc., not max HP
+                if m.get("subType") == "hit-points-per-level":
+                    mx += int(m["value"]) * level
+                elif m.get("subType") == "hit-points":
+                    mx += int(m["value"])
+    cur = max(0, mx - int(c.get("removedHitPoints") or 0))
+    ds = c.get("deathSaves") or {}
+    return {"entityId": str(c.get("id")), "name": c.get("name") or "?", "hp": cur, "max": mx,
+            "temp": int(c.get("temporaryHitPoints") or 0), "dead": bool(ds.get("failCount", 0) >= 3),
+            "stable": bool(ds.get("isStabilized"))}
+
+
+PARTY = {"chars": [], "ids": [], "roster_at": 0.0}
+
+
+async def party_watch(cfg):
+    """Polls the campaign's characters every 20 s and sends their hit points when something changed."""
+    while True:
+        try:
+            if time.time() - PARTY["roster_at"] > 300 or not PARTY["ids"]:
+                PARTY["ids"] = await asyncio.to_thread(campaign_character_ids, cfg)
+                PARTY["roster_at"] = time.time()
+            seen = {r["entityId"] for r in RECENT if r.get("entityType") == "character"}
+            ids = list(dict.fromkeys(PARTY["ids"] + sorted(seen)))
+            chars = []
+            for cid in ids:
+                try:
+                    chars.append(hit_points(await asyncio.to_thread(ddb_get, f"https://character-service.dndbeyond.com/character/v5/character/{cid}", cfg["cobalt"])))
+                except Exception as e:
+                    log(f"Could not read character {cid}: {e}")
+            chars.sort(key=lambda x: x["name"].lower())
+            if chars != PARTY["chars"]:
+                PARTY["chars"] = chars
+                log("Party HP: " + ", ".join(f"{x['name']} {x['hp']}/{x['max']}" + (f"+{x['temp']}" if x["temp"] else "") for x in chars))
+                await send_all({"type": "party", "chars": chars})
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log(f"Party HP update failed: {e}")
+        await asyncio.sleep(20)
 
 
 # ---------------------------------------------------------------- login window (runs as its own process)
@@ -373,7 +476,7 @@ async def client_handler(ws):
     log(f"Owlbear connected ({len(CLIENTS)} tab{'s' if len(CLIENTS) != 1 else ''})")
     try:
         await ws.send(json.dumps({"type": "hello", "version": VERSION, "campaignId": STATE["campaignId"],
-                                  "connected": STATE["connected"], "recent": list(RECENT)}))
+                                  "connected": STATE["connected"], "recent": list(RECENT), "party": PARTY["chars"]}))
         async for _ in ws:
             pass
     except Exception:
@@ -461,7 +564,7 @@ async def relay_main(cfg):
         status(f"Port {port} is already in use (is another relay running?): {e}", False); return
     async with server:
         log(f"Local endpoint: ws://127.0.0.1:{port}")
-        await game_log(cfg)
+        await asyncio.gather(game_log(cfg), party_watch(cfg))
 
 
 TUNNEL_OFF = bool(__import__("os").environ.get("RELAY_NO_TUNNEL"))  # for local testing only

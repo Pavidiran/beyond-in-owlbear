@@ -125,3 +125,11 @@ wss://<subdomain>.trycloudflare.com/?k=<secret>. Relay rejects wrong secrets (cl
 Funding (asked by the user): Cloudflare's free tier is a deliberate business strategy — free traffic
 strengthens ISP peering and threat intelligence, uses spare capacity, and feeds paid conversions.
 Note: Claude was not allowed to open a tunnel itself; first real tunnel test is the user's.
+
+## v0.5.0 / relay 0.5.0 (2026-11-08): party hit points
+Read-only HP for every campaign character (roster: /api/campaign/stt/active-short-characters/{id},
+character: character-service v5, DM bearer token). Max HP = override, else base + bonus + CON mod x level
++ "hit-points-per-level" x level + flat "hit-points" bonuses without dice (dice ones are potions).
+Verified against a public sheet (37/45) and the user's campaign (2 characters). Polled every 20 s,
+sent on change, stored in room metadata (KEYS.party), shown at the top of the Battle tab and on PC rows.
+Note: dndbeyond-mcp's calculateMaxHp (base + bonus) is wrong — it ignores CON.

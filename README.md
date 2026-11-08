@@ -38,7 +38,8 @@ outside Owlbear.
 ## Roll relay (DM only)
 
 Players roll in their D&D Beyond sheet as usual. To show those rolls in Owlbear (roll log, pop-ups,
-initiative straight into the battle tracker), the DM runs **Beyond Relay** during the session.
+initiative straight into the battle tracker) and the party's hit points (read from D&D Beyond every
+20 seconds, shown in the Battle tab), the DM runs **Beyond Relay** during the session.
 Players install nothing.
 
 1. Download the program for your system from the

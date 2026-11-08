@@ -5,6 +5,7 @@ export const KEYS = {
   log: `${NS}/log`,        // last rolls, newest first
   battle: `${NS}/battle`,  // { round, turn, entries: [{ id, kind: "pc"|"npc", entityId?, name, init, hp?, maxHp?, bonus? }] }
   relay: `${NS}/relay`,    // { connected, note, campaignId, t }
+  party: `${NS}/party`,    // { chars: [{ entityId, name, hp, max, temp, dead, stable }], t }  read from D&D Beyond by the relay
 };
 // The relay code shown in Beyond Relay is "<tunnel-subdomain>/<secret>". A full https/wss link is accepted too.
 export function relayUrl(code) {
