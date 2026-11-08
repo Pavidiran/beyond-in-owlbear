@@ -1,19 +1,20 @@
-// Beyond in Owlbear — background page. Runs in every player's Owlbear tab while the room is open,
-// but only the GM's copy does anything: it connects to Beyond Relay on this computer
-// (ws://localhost:8790), writes every D&D Beyond roll into the room's roll log, puts characters
-// into the battle tracker when they roll initiative, and keeps the relay status in the room.
+// Beyond in Owlbear — background page. Runs in every player's Owlbear tab while the room is open.
+// Everyone: shows pop-ups for relayed rolls and turn changes.
+// DM only: connects to Beyond Relay through the relay code (a public Cloudflare quick-tunnel address
+// plus a secret, set in the panel's settings), writes every D&D Beyond roll into the room's roll log,
+// puts characters into the battle tracker when they roll initiative, and keeps the relay status in the room.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
-import { NS, KEYS, RELAY_URL, LOG_MAX, uid, campaignIdOf, flattenRoll, sortEntries, emptyBattle, describe } from "./shared.js?v=0.4.0";
+import { NS, KEYS, LOG_MAX, uid, campaignIdOf, flattenRoll, sortEntries, emptyBattle, describe, relayUrl } from "./shared.js?v=0.4.1";
 
-let role = "PLAYER", ws = null, relayCampaign = "", retry = null, lastRelay = "", beat = null;
+let role = "PLAYER", ws = null, wsUrl = "", relayCampaign = "", retry = null, lastRelay = "", beat = null;
 
 const meta = async () => (await OBR.room.getMetadata()) || {};
 
 async function writeRelay(connected, note = "") {
   const key = `${connected}|${note}|${relayCampaign}`;
-  const stale = lastRelay !== key;
+  const changed = lastRelay !== key;
   lastRelay = key;
-  if (!stale && !connected) return; // don't spam metadata with repeated "not running"
+  if (!changed && !connected) return; // don't rewrite the same "off" state; "on" is refreshed as a heartbeat
   await OBR.room.setMetadata({ [KEYS.relay]: { connected, note, campaignId: relayCampaign, t: Date.now() } });
 }
 
@@ -39,16 +40,23 @@ async function onRoll(roll, replay = false) {
 
 function schedule() { clearTimeout(retry); retry = setTimeout(connect, 5000); }
 
-function connect() {
-  if (role !== "GM" || (ws && ws.readyState <= 1)) return;
-  try { ws = new WebSocket(RELAY_URL); } catch { schedule(); return; }
-  ws.onopen = () => { clearInterval(beat); beat = setInterval(() => writeRelay(true).catch(() => {}), 60000); };
-  ws.onmessage = async (ev) => {
+async function connect() {
+  clearTimeout(retry);
+  if (role !== "GM") return;
+  const url = relayUrl(((await meta())[KEYS.cfg] || {}).relayCode);
+  if (!url) { await writeRelay(false, "No relay code set: start Beyond Relay and paste its code in the panel settings (gear icon)").catch(() => {}); return; }
+  if (ws && ws.readyState <= 1 && wsUrl === url) return;
+  if (ws) { ws.onclose = null; ws.close(); }
+  wsUrl = url;
+  try { ws = new WebSocket(url); } catch { schedule(); return; }
+  const sock = ws;
+  sock.onopen = () => { clearInterval(beat); beat = setInterval(() => writeRelay(true).catch(() => {}), 60000); };
+  sock.onmessage = async (ev) => {
     let msg; try { msg = JSON.parse(ev.data); } catch { return; }
     try {
       if (msg.type === "hello") {
         relayCampaign = String(msg.campaignId || "");
-        lastRelay = ""; await writeRelay(!!msg.connected, msg.connected ? "" : "relay running, not connected to D&D Beyond yet");
+        lastRelay = ""; await writeRelay(!!msg.connected, msg.connected ? "" : "Beyond Relay is running but not connected to D&D Beyond");
         const recent = (msg.recent || []).filter((r) => Date.now() - (r.t || 0) < 10 * 60 * 1000);
         for (const r of recent) await onRoll(r, true);
       } else if (msg.type === "status") {
@@ -59,8 +67,15 @@ function connect() {
       }
     } catch (e) { console.error("beyond-in-owlbear bg", e); }
   };
-  ws.onclose = () => { clearInterval(beat); writeRelay(false, "Beyond Relay is not running on this computer").catch(() => {}); schedule(); };
-  ws.onerror = () => {};
+  sock.onclose = (ev) => {
+    if (sock !== ws) return;
+    clearInterval(beat);
+    const note = ev.code === 4001 ? "Wrong relay code: copy the current one from the Beyond Relay window"
+      : "Can't reach Beyond Relay with this code. Is it running? It shows a new code after every restart.";
+    writeRelay(false, note).catch(() => {});
+    schedule();
+  };
+  sock.onerror = () => {};
 }
 
 OBR.onReady(async () => {
@@ -72,6 +87,12 @@ OBR.onReady(async () => {
     if (ev.data && ev.data.name) OBR.notification.show(`Round ${ev.data.round || 1}: ${ev.data.name}'s turn`, "INFO").catch(() => {});
   });
   role = await OBR.player.getRole();
-  OBR.player.onChange((p) => { if (p.role !== role) { role = p.role; if (role === "GM") connect(); else if (ws) ws.close(); } });
+  OBR.player.onChange((p) => { if (p.role !== role) { role = p.role; if (role === "GM") connect(); else if (ws) { ws.onclose = null; ws.close(); ws = null; } } });
+  // A new relay code saved in the panel takes effect at once.
+  let lastCode = ((await meta())[KEYS.cfg] || {}).relayCode || "";
+  OBR.room.onMetadataChange((m) => {
+    const code = ((m || {})[KEYS.cfg] || {}).relayCode || "";
+    if (code !== lastCode) { lastCode = code; connect(); }
+  });
   if (role === "GM") connect();
 });

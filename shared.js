@@ -6,7 +6,17 @@ export const KEYS = {
   battle: `${NS}/battle`,  // { round, turn, entries: [{ id, kind: "pc"|"npc", entityId?, name, init, hp?, maxHp?, bonus? }] }
   relay: `${NS}/relay`,    // { connected, note, campaignId, t }
 };
-export const RELAY_URL = "ws://localhost:8790";
+// The relay code shown in Beyond Relay is "<tunnel-subdomain>/<secret>". A full https/wss link is accepted too.
+export function relayUrl(code) {
+  const s = String(code || "").trim();
+  const m = s.match(/([a-z0-9-]+)\.trycloudflare\.com.*?[?&]k=([A-Za-z0-9]+)/i) || s.match(/^([a-z0-9-]+)\/([A-Za-z0-9]+)$/i);
+  return m && m[2] ? `wss://${m[1].toLowerCase()}.trycloudflare.com/?k=${m[2]}` : "";
+}
+export function cleanRelayCode(code) {
+  const u = relayUrl(code); if (!u) return "";
+  const m = u.match(/^wss:\/\/([a-z0-9-]+)\.trycloudflare\.com\/\?k=(.+)$/);
+  return `${m[1]}/${m[2]}`;
+}
 export const LOG_MAX = 25;
 export const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 export const campaignIdOf = (url) => { const m = String(url || "").match(/campaigns\/(\d+)/); return m ? m[1] : ""; };

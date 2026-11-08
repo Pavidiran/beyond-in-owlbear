@@ -37,17 +37,24 @@ outside Owlbear.
 
 ## Roll relay (DM only)
 
-Players roll in their D&D Beyond sheet as usual. To show those rolls in Owlbear, the DM runs
-**Beyond Relay** during the session. It reads the campaign's game log with the DM's own D&D Beyond
-session and hands each roll to the Owlbear tab on the same computer. Players install nothing.
+Players roll in their D&D Beyond sheet as usual. To show those rolls in Owlbear (roll log, pop-ups,
+initiative straight into the battle tracker), the DM runs **Beyond Relay** during the session.
+Players install nothing.
 
-- Download the program for your system from the
-  [releases page](https://github.com/Pavidiran/beyond-in-owlbear/releases) (Windows .exe, macOS, Linux),
-  or run `python relay/relay.py` with `pip install websockets`.
-- It opens a small window: paste your campaign link, click **Sign in to D&D Beyond** and log in in the
-  window that opens. The relay keeps the session (in `beyond-relay.json` next to the program, never
-  leaving your computer). When it expires after a few weeks, the status turns red and you sign in again. Both are saved in `beyond-relay.json` next to the
-  program and never leave your computer. The cookie expires after a few weeks: delete that file
-  and run again to paste a fresh one.
-- Keep the window open while playing. It lists every roll it sees.
-- Unofficial D&D Beyond feed: can break when D&D Beyond changes things.
+1. Download the program for your system from the
+   [releases page](https://github.com/Pavidiran/beyond-in-owlbear/releases) (Windows, macOS, Linux).
+2. Start it, paste your campaign link, click **Sign in to D&D Beyond** and log in the usual way
+   (email, Google, Apple, ...). The login is kept for next time.
+3. The relay shows a **relay code** and copies it to the clipboard. In Owlbear open the
+   Beyond in Owlbear panel, click the gear icon, paste it under *Relay code*, save. The green dot in
+   the panel means rolls are live. The code changes every time the relay starts.
+
+How it reaches Owlbear: browsers no longer let a web page connect to a program on your own
+computer, so the relay opens a free Cloudflare "quick tunnel" (no account, no domain) that gives it a
+temporary public https address. The relay downloads Cloudflare's helper on first start (checksum
+verified) unless it is already installed. Only clients that know the code's secret part get in.
+Cloudflare gives quick tunnels no uptime guarantee; if one drops, the relay opens a new one and
+shows a new code.
+
+Settings and the D&D Beyond login stay in `beyond-relay.json` next to the program. Unofficial
+D&D Beyond feed: may break when D&D Beyond changes things.

@@ -16,6 +16,7 @@ import base64
 import json
 import queue
 import re
+import secrets
 import subprocess
 import sys
 import threading
@@ -38,7 +39,7 @@ for _s in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code
     except Exception:
         pass
 
-VERSION = "0.3.3"
+VERSION = "0.4.0"
 DDB = "https://www.dndbeyond.com"
 AUTH_URL = "https://auth-service.dndbeyond.com/v1/cobalt-token"
 WS_URL = "wss://game-log-api-live.dndbeyond.com/v1"
@@ -172,6 +173,135 @@ def login_command():
     return [sys.executable, "--login"] if FROZEN else [sys.executable, str(Path(__file__).resolve()), "--login"]
 
 
+# ---------------------------------------------------------------- public address (Cloudflare quick tunnel)
+# Browsers no longer let an internet page connect to a program on the player's own computer, so the
+# relay gets a temporary public https address through a Cloudflare "quick tunnel" (free, no account,
+# no domain). The address changes every start; together with a per-run secret it forms the relay
+# code the DM pastes into the extension.
+TUNNEL = {"url": "", "proc": None}
+TOKEN = secrets.token_urlsafe(9).replace("-", "x").replace("_", "y")
+CF_NAME = "cloudflared.exe" if sys.platform == "win32" else "cloudflared"
+CF_PIDFILE = HERE / ".cloudflared.pid"
+TUNNEL_RE = re.compile(r"https://([a-z0-9-]+)\.trycloudflare\.com")
+
+
+def relay_code():
+    m = TUNNEL_RE.search(TUNNEL["url"] or "")
+    return f"{m.group(1)}/{TOKEN}" if m else ""
+
+
+def cf_asset():
+    import platform
+    arch = "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "amd64"
+    if sys.platform == "win32":
+        return f"cloudflared-windows-{arch}.exe"
+    if sys.platform == "darwin":
+        return f"cloudflared-darwin-{arch}.tgz"
+    return f"cloudflared-linux-{arch}"
+
+
+def find_cloudflared():
+    import shutil
+    for p in (HERE / CF_NAME, Path(shutil.which("cloudflared") or ""),
+              Path(r"C:\Program Files (x86)\cloudflared\cloudflared.exe"), Path(r"C:\Program Files\cloudflared\cloudflared.exe")):
+        if str(p) not in ("", ".") and p.is_file():
+            return p
+    return None
+
+
+def download_cloudflared():
+    """Fetch Cloudflare's official tunnel helper from its GitHub releases and check the published SHA-256."""
+    import hashlib, tarfile, io
+    api = "https://api.github.com/repos/cloudflare/cloudflared/releases/latest"
+    with urllib.request.urlopen(urllib.request.Request(api, headers={"User-Agent": UA, "Accept": "application/vnd.github+json"}), timeout=30) as r:
+        rel = json.loads(r.read().decode())
+    name = cf_asset()
+    asset = next((a for a in rel.get("assets", []) if a.get("name") == name), None)
+    if not asset:
+        raise RuntimeError(f"no {name} in cloudflared release {rel.get('tag_name')}")
+    with urllib.request.urlopen(urllib.request.Request(asset["browser_download_url"], headers={"User-Agent": UA}), timeout=300) as r:
+        data = r.read()
+    digest = str(asset.get("digest") or "")
+    if digest.startswith("sha256:") and hashlib.sha256(data).hexdigest() != digest.split(":", 1)[1]:
+        raise RuntimeError("checksum mismatch, download discarded")
+    if name.endswith(".tgz"):
+        with tarfile.open(fileobj=io.BytesIO(data)) as t:
+            member = next(m for m in t.getmembers() if m.name.endswith("cloudflared"))
+            data = t.extractfile(member).read()
+    target = HERE / CF_NAME
+    target.write_bytes(data)
+    target.chmod(0o755)
+    return target
+
+
+def kill_stale_tunnel():
+    """A relay that was killed hard can leave its tunnel helper running; stop that one (and only that one)."""
+    try:
+        pid = int(CF_PIDFILE.read_text().strip())
+    except Exception:
+        return
+    try:
+        if sys.platform == "win32":
+            out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"], capture_output=True, text=True).stdout
+            if "cloudflared" in out.lower():
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+        else:
+            import os, signal
+            os.kill(pid, signal.SIGTERM)
+    except Exception:
+        pass
+    CF_PIDFILE.unlink(missing_ok=True)
+
+
+async def run_tunnel(port):
+    """Keeps a quick tunnel to the local endpoint open; restarts it (with a new address) if it drops."""
+    kill_stale_tunnel()
+    exe = find_cloudflared()
+    if not exe:
+        status("Downloading Cloudflare's tunnel helper (one time, about 40 MB)...")
+        try:
+            exe = await asyncio.to_thread(download_cloudflared)
+            log(f"Tunnel helper saved as {exe.name}")
+        except Exception as e:
+            msg = f"Could not download the tunnel helper: {e}"
+            log(msg); status(msg, False); return
+    while True:
+        flags = {"creationflags": 0x08000000} if sys.platform == "win32" else {}  # CREATE_NO_WINDOW
+        proc = await asyncio.create_subprocess_exec(str(exe), "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{port}",
+                                                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE, **flags)
+        TUNNEL["proc"] = proc
+        CF_PIDFILE.write_text(str(proc.pid))
+        try:
+            while True:
+                line = await proc.stderr.readline()
+                if not line:
+                    break
+                m = TUNNEL_RE.search(line.decode(errors="replace"))
+                if m and m.group(0) != TUNNEL["url"]:
+                    TUNNEL["url"] = m.group(0)
+                    log(f"Public address ready: {TUNNEL['url']}")
+                    emit("code", relay_code())
+            await proc.wait()
+        except asyncio.CancelledError:
+            stop_tunnel()
+            raise
+        TUNNEL["url"] = ""
+        emit("code", "")
+        log("Tunnel closed; opening a new one (the relay code will change)")
+        await asyncio.sleep(5)
+
+
+def stop_tunnel():
+    p = TUNNEL.get("proc")
+    if p and p.returncode is None:
+        try:
+            p.terminate()
+        except Exception:
+            pass
+    TUNNEL["proc"] = None
+    CF_PIDFILE.unlink(missing_ok=True)
+
+
 # ---------------------------------------------------------------- roll normalisation
 def normalize(m):
     d = m.get("data") or {}
@@ -230,6 +360,15 @@ async def send_all(obj):
 
 
 async def client_handler(ws):
+    # Reachable from the internet through the tunnel, so only clients that know this run's secret get in.
+    from urllib.parse import urlparse, parse_qs
+    try:
+        k = (parse_qs(urlparse(ws.request.path).query).get("k") or [""])[0]
+    except Exception:
+        k = ""
+    if not secrets.compare_digest(k, TOKEN):
+        await ws.close(code=4001, reason="wrong relay code")
+        return
     CLIENTS.add(ws)
     log(f"Owlbear connected ({len(CLIENTS)} tab{'s' if len(CLIENTS) != 1 else ''})")
     try:
@@ -321,15 +460,20 @@ async def relay_main(cfg):
     except OSError as e:
         status(f"Port {port} is already in use (is another relay running?): {e}", False); return
     async with server:
-        log(f"Local endpoint for the Owlbear extension: ws://127.0.0.1:{port}")
+        log(f"Local endpoint: ws://127.0.0.1:{port}")
         await game_log(cfg)
 
 
+TUNNEL_OFF = bool(__import__("os").environ.get("RELAY_NO_TUNNEL"))  # for local testing only
+
+
 class Relay:
-    """Runs the asyncio relay in a background thread; can be restarted with new settings."""
+    """Runs the asyncio relay in a background thread; can be restarted with new settings.
+    The tunnel lives for the whole run, so re-connecting to D&D Beyond keeps the same relay code."""
     def __init__(self):
         self.loop = asyncio.new_event_loop()
         self.task = None
+        self.tunnel = None
         threading.Thread(target=self.loop.run_forever, daemon=True).start()
 
     def start(self, cfg):
@@ -337,13 +481,21 @@ class Relay:
             if self.task and not self.task.done():
                 self.task.cancel()
             self.task = self.loop.create_task(relay_main(cfg))
+            if not self.tunnel and not TUNNEL_OFF:
+                self.tunnel = self.loop.create_task(run_tunnel(int(cfg.get("port") or DEFAULT_PORT)))
         self.loop.call_soon_threadsafe(_go)
 
     def stop(self):
         def _stop():
-            if self.task and not self.task.done():
-                self.task.cancel()
-        self.loop.call_soon_threadsafe(_stop)
+            for t in (self.task, self.tunnel):
+                if t and not t.done():
+                    t.cancel()
+            stop_tunnel()
+        try:
+            self.loop.call_soon_threadsafe(_stop)
+            time.sleep(0.5)  # let the tunnel helper terminate before the program exits
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------- window
@@ -379,15 +531,26 @@ def run_gui():
     paste_btn = ttk.Button(btns, text="Paste cookie instead...")
     paste_btn.pack(side="left", padx=(8, 0))
 
+    ttk.Label(frm, text="Relay code").grid(row=4, column=0, sticky="w", pady=(10, 0))
+    code_var = tk.StringVar(value="(starts after connecting)")
+    ttk.Entry(frm, textvariable=code_var, state="readonly").grid(row=4, column=1, sticky="ew", pady=(10, 0))
+    def copy_code():
+        if relay_code():
+            root.clipboard_clear(); root.clipboard_append(relay_code())
+            code_hint.set("Copied. Paste it in Owlbear: Beyond in Owlbear panel > gear icon > Relay code.")
+    ttk.Button(frm, text="Copy", command=copy_code).grid(row=4, column=2, padx=(6, 0), pady=(10, 0))
+    code_hint = tk.StringVar(value="Paste this code once per session in Owlbear (Beyond in Owlbear panel > gear icon). It changes every time the relay starts.")
+    ttk.Label(frm, textvariable=code_hint, foreground="#777", wraplength=540).grid(row=5, column=0, columnspan=3, sticky="w")
+
     status_var = tk.StringVar(value="Not connected")
     status_lbl = ttk.Label(frm, textvariable=status_var, wraplength=540)
-    status_lbl.grid(row=4, column=0, columnspan=3, sticky="w", pady=(10, 4))
+    status_lbl.grid(row=6, column=0, columnspan=3, sticky="w", pady=(10, 4))
 
     logbox = tk.Text(frm, height=12, state="disabled", wrap="word")
-    logbox.grid(row=5, column=0, columnspan=3, sticky="nsew")
-    frm.rowconfigure(5, weight=1)
-    ttk.Label(frm, text=f"Settings stay on this computer (beyond-relay.json next to this program). Local endpoint ws://127.0.0.1:{cfg.get('port') or DEFAULT_PORT}",
-              foreground="#777", wraplength=540).grid(row=6, column=0, columnspan=3, sticky="w", pady=(6, 0))
+    logbox.grid(row=7, column=0, columnspan=3, sticky="nsew")
+    frm.rowconfigure(7, weight=1)
+    ttk.Label(frm, text="Settings stay on this computer (beyond-relay.json next to this program). The public address comes from a free Cloudflare quick tunnel; no account needed.",
+              foreground="#777", wraplength=540).grid(row=8, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
     def connect():
         cid, cookie = parse_campaign(campaign_var.get()), clean_cookie(cfg.get("cobalt"))
@@ -450,6 +613,11 @@ def run_gui():
                     text, ok = payload
                     status_var.set(text)
                     status_lbl.configure(foreground="#2a9d4a" if ok else "#c0392b" if ok is False else "#333")
+                elif kind == "code":
+                    code_var.set(payload or "(opening a public address...)")
+                    if payload:
+                        root.clipboard_clear(); root.clipboard_append(payload)
+                        code_hint.set("New code, already copied. Paste it in Owlbear: Beyond in Owlbear panel > gear icon > Relay code.")
                 elif kind == "signin_needed":
                     login_var.set("Session expired - sign in again")
                 elif kind == "login_done":
@@ -489,10 +657,25 @@ def run_console():
             print("Invalid input."); return 1
         cfg.update({"campaignId": cid, "cobalt": cookie, "port": int(cfg.get("port") or DEFAULT_PORT)})
         save_config(cfg)
+
+    async def both():
+        jobs = [relay_main(cfg)]
+        if not TUNNEL_OFF:
+            jobs.append(run_tunnel(int(cfg.get("port") or DEFAULT_PORT)))
+        async def show_code():
+            last = ""
+            while True:
+                await asyncio.sleep(1)
+                if relay_code() and relay_code() != last:
+                    last = relay_code(); print(f"\n  RELAY CODE (paste in Owlbear): {last}\n", flush=True)
+        jobs.append(show_code())
+        await asyncio.gather(*jobs)
     try:
-        asyncio.run(relay_main(cfg))
+        asyncio.run(both())
     except KeyboardInterrupt:
         print("\nStopped.")
+    finally:
+        stop_tunnel()
     return 0
 
 

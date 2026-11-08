@@ -115,3 +115,13 @@ cookie exception for owlbear.rodeo. Chrome/Edge: nothing. The panel shows this p
   permission, which Owlbear does not; verified denied in Chromium 152. Firefox 154+ shows a
   permission prompt. => The localhost hop needs replacing by an internet hop (hosted hub both the
   relay and the extension connect out to). Decision pending with the user.
+
+## v0.4.1 / relay 0.4.0 (2026-11-08): public address through a Cloudflare quick tunnel
+User rejected hosted servers and third-party mailboxes; wants one small app, no accounts. Chosen:
+the relay opens a Cloudflare quick tunnel (cloudflared, free, no account/domain, random
+*.trycloudflare.com address per run). Relay code = "<subdomain>/<per-run secret>"; DM pastes it into
+the panel settings (room metadata config.relayCode); the DM's background page connects to
+wss://<subdomain>.trycloudflare.com/?k=<secret>. Relay rejects wrong secrets (close 4001).
+Funding (asked by the user): Cloudflare's free tier is a deliberate business strategy — free traffic
+strengthens ISP peering and threat intelligence, uses spare capacity, and feeds paid conversions.
+Note: Claude was not allowed to open a tunnel itself; first real tunnel test is the user's.

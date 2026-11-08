@@ -2,9 +2,9 @@
 // the shared roll log and battle tracker. D&D Beyond handles the sheets; the rolls arrive through
 // Beyond Relay on the DM's computer (see bg.js), initiative rolls fill the battle tracker.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
-import { NS, KEYS, uid, sortEntries, advanceTurn, emptyBattle, describe } from "./shared.js?v=0.4.0";
+import { NS, KEYS, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode } from "./shared.js?v=0.4.1";
 
-const VERSION = "0.4.0";
+const VERSION = "0.4.1";
 const SIZES = { compact: [440, 620], tall: [440, 900], wide: [620, 900] };
 const DDB = "https://www.dndbeyond.com";
 const HOME = `${DDB}/characters`; // "My characters": each player picks their own sheet there
@@ -224,9 +224,14 @@ async function onAction(act, el) {
     case "size": PREF.size = PREF.size === "compact" ? "tall" : PREF.size === "tall" ? "wide" : "compact"; savePref(); layout(); await applySize(); break;
     case "reload": go(current); break;
     case "tab": window.open(current, "_blank"); break;
-    case "gm": $("campaign").value = config().campaignUrl; $("gm").hidden = !$("gm").hidden; break;
+    case "gm": $("campaign").value = config().campaignUrl; $("relayCode").value = config().relayCode || ""; $("gm").hidden = !$("gm").hidden; break;
     case "gmClose": $("gm").hidden = true; break;
-    case "gmSave": await saveConfig((cfg) => { cfg.campaignUrl = parseCampaign($("campaign").value); }); $("gm").hidden = true; break;
+    case "gmSave": {
+      const raw = $("relayCode").value.trim(), code = cleanRelayCode(raw);
+      if (raw && !code) { hint("That relay code doesn't look right. Copy it again from the Beyond Relay window (words/letters, e.g. brave-otter-lamp/Ab12Cd34)."); break; }
+      await saveConfig((cfg) => { cfg.campaignUrl = parseCampaign($("campaign").value); cfg.relayCode = code; });
+      $("gm").hidden = true; hint(""); break;
+    }
     case "drawer": PREF.drawer = PREF.drawer === ds.v ? "" : ds.v; savePref(); renderDrawer(); break;
 
     case "bNext": { const b = await updateBattle((b) => advanceTurn(b, 1)); await announceTurn(b); break; }
