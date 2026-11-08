@@ -38,7 +38,7 @@ for _s in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code
     except Exception:
         pass
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 DDB = "https://www.dndbeyond.com"
 AUTH_URL = "https://auth-service.dndbeyond.com/v1/cobalt-token"
 WS_URL = "wss://game-log-api-live.dndbeyond.com/v1"
@@ -123,15 +123,21 @@ def fetch_token(cobalt):
 # ---------------------------------------------------------------- login window (runs as its own process)
 def run_login():
     """Opens D&D Beyond's sign-in page in an embedded browser window and waits for the session cookie."""
+    import os
     try:
         import webview
     except ImportError:
         return 2
-    found = {}
+    # Keep Google/Apple/Twitch sign-in pop-ups inside this window instead of the system browser.
+    webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = False
+    found, closed = {}, {"v": False}
+    limit = int(os.environ.get("RELAY_LOGIN_TIMEOUT", "900"))  # seconds
 
     def poll(w):
-        for _ in range(900):  # up to 15 minutes
+        for _ in range(limit):
             time.sleep(1)
+            if closed["v"]:
+                break
             try:
                 for jar in w.get_cookies():
                     for name, morsel in jar.items():
@@ -147,12 +153,13 @@ def run_login():
             pass
 
     w = webview.create_window("Sign in to D&D Beyond", f"{DDB}/sign-in?returnUrl=%2Fmy-campaigns", width=640, height=780)
-    # Own browser profile next to the program, so it never collides with another WebView2 user.
+    w.events.closed += lambda: closed.__setitem__("v", True)
+    # Own browser profile next to the program, so it never collides with another WebView2 user,
+    # and the login is remembered for the next time.
     webview.start(poll, w, private_mode=False, storage_path=str(HERE / ".webview"))
     if found:
         LOGIN_RESULT.write_text(found["v"])
-        return 0
-    return 1
+    os._exit(0 if found else 1)  # no lingering helper process, whatever threads are left
 
 
 def login_command():
