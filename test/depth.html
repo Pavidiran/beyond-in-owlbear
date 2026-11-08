@@ -1,0 +1,27 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Cookie depth test</title>
+<style>body{font:14px system-ui;background:#1f1f23;color:#eee;margin:0;padding:14px}h1{font-size:18px}.cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}.col{background:#2a2a30;border:1px solid #444;border-radius:8px;padding:10px}button{font:inherit;padding:4px 10px;margin:2px}iframe{width:100%;border:1px solid #666;background:#fff;margin-top:6px}#f1{height:120px}#f2{height:230px}small{color:#aaa}code{background:#111;padding:1px 4px;border-radius:3px}</style></head>
+<body>
+<h1>Does a sign-in pop-up reach a framed site? (Firefox cookie test)</h1>
+<p>Both columns use <code>httpbingo.org</code> as a stand-in for D&D Beyond. The frame prints the cookies it receives.
+In each column: press <b>1</b>, click once inside the pop-up, close it, press <b>2</b>. Expected if it works: <code>"obrtest": "..."</code> appears in the frame. If not: <code>{}</code>.</p>
+<div class="cols">
+  <div class="col">
+    <h3>A — one layer (page → site)</h3>
+    <small>The pop-up is opened by this top-level page.</small><br>
+    <button id="pop1">1. Open pop-up</button> <button id="rl1">2. Reload frame</button>
+    <iframe id="f1" src="https://httpbingo.org/cookies"></iframe>
+  </div>
+  <div class="col">
+    <h3>B — two layers (page → middle → site)</h3>
+    <small>Like Owlbear → extension → D&D Beyond. The pop-up is opened by the middle layer.</small>
+    <iframe id="f2" src="https://raw.githack.com/Pavidiran/beyond-in-owlbear/main/test/mid.html"></iframe>
+  </div>
+</div>
+<p><small>Top-level origin: <span id="o"></span>. Afterwards you can delete the test cookie by visiting <a href="https://httpbingo.org/cookies/delete?obrtest=" target="_blank" rel="noopener">httpbingo.org/cookies/delete?obrtest=</a>.</small></p>
+<script>
+document.getElementById('o').textContent = location.origin;
+document.getElementById('pop1').onclick = () => window.open('https://httpbingo.org/cookies/set?obrtest=one_layer', 'p1', 'width=520,height=520');
+document.getElementById('rl1').onclick = () => { document.getElementById('f1').src = 'https://httpbingo.org/cookies?r=' + Date.now(); };
+</script>
+</body></html>

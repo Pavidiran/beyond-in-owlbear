@@ -1,0 +1,14 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>mid layer</title>
+<style>body{margin:0;font:13px system-ui;background:#2a2a30;color:#eee;padding:8px}button{font:inherit;padding:4px 10px;margin:2px}iframe{width:100%;height:120px;border:1px solid #666;background:#fff;margin-top:6px}</style></head>
+<body>
+<div>Middle layer (<span id="o"></span>) — stands in for the extension</div>
+<button id="pop">1. Open pop-up (click inside it, then close it)</button>
+<button id="rl">2. Reload frame</button>
+<iframe id="f" src="https://httpbingo.org/cookies"></iframe>
+<script>
+document.getElementById('o').textContent = location.origin;
+document.getElementById('pop').onclick = () => window.open('https://httpbingo.org/cookies/set?obrtest=two_layers', 'p2', 'width=520,height=520');
+document.getElementById('rl').onclick = () => { document.getElementById('f').src = 'https://httpbingo.org/cookies?r=' + Date.now(); };
+</script>
+</body></html>
