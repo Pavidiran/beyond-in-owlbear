@@ -44,9 +44,9 @@ session and hands each roll to the Owlbear tab on the same computer. Players ins
 - Download the program for your system from the
   [releases page](https://github.com/Pavidiran/beyond-in-owlbear/releases) (Windows .exe, macOS, Linux),
   or run `python relay/relay.py` with `pip install websockets`.
-- It opens a small window: paste your campaign link and your D&D Beyond session cookie (`CobaltSession`,
-  copied from the browser's developer tools; the "Where is it?" button explains) and click
-  "Save & connect". Both are saved in `beyond-relay.json` next to the
+- It opens a small window: paste your campaign link, click **Sign in to D&D Beyond** and log in in the
+  window that opens. The relay keeps the session (in `beyond-relay.json` next to the program, never
+  leaving your computer). When it expires after a few weeks, the status turns red and you sign in again. Both are saved in `beyond-relay.json` next to the
   program and never leave your computer. The cookie expires after a few weeks: delete that file
   and run again to paste a fresh one.
 - Keep the window open while playing. It lists every roll it sees.

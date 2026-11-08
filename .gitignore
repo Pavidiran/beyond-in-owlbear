@@ -4,3 +4,6 @@ relay/build/
 relay/dist/
 *.spec
 __pycache__/
+relay/.login-result
+
+relay/.webview/

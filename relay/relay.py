@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Beyond Relay - shows your D&D Beyond campaign's dice rolls inside Owlbear Rodeo.
 
-Only the DM runs this. It opens a small window: paste the campaign link and your D&D Beyond session
-cookie once, click Connect, keep the window open while playing. It listens to the campaign's game log
-(the same feed the D&D Beyond website uses) and hands every roll to the "Beyond in Owlbear" extension
-in the Owlbear tab on this computer through a local connection (ws://127.0.0.1:8790).
+Only the DM runs this. It opens a small window: paste the campaign link, click "Sign in to D&D Beyond"
+and log in normally in the window that opens. The relay keeps the session, listens to the campaign's
+game log (the same feed the D&D Beyond website uses) and hands every roll to the "Beyond in Owlbear"
+extension in the Owlbear tab on this computer through a local connection (ws://127.0.0.1:8790).
 Players install nothing.
 
 Settings are saved in beyond-relay.json next to this program and never leave this computer.
@@ -16,6 +16,7 @@ import base64
 import json
 import queue
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -28,7 +29,7 @@ from pathlib import Path
 try:
     import websockets
 except ImportError:  # pragma: no cover
-    print("Missing dependency: run  pip install websockets")
+    print("Missing dependency: run  pip install websockets pywebview")
     sys.exit(1)
 
 for _s in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code page
@@ -37,7 +38,8 @@ for _s in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code
     except Exception:
         pass
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
+DDB = "https://www.dndbeyond.com"
 AUTH_URL = "https://auth-service.dndbeyond.com/v1/cobalt-token"
 WS_URL = "wss://game-log-api-live.dndbeyond.com/v1"
 NAMEID_CLAIM = "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier"
@@ -46,18 +48,18 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like 
 FROZEN = getattr(sys, "frozen", False)
 HERE = Path(sys.executable).parent if FROZEN else Path(__file__).parent
 CONFIG = HERE / "beyond-relay.json"
-RAWLOG = HERE / "relay-raw.jsonl"  # last raw roll messages, for debugging the format
+RAWLOG = HERE / "relay-raw.jsonl"        # last raw roll messages, for debugging the format
+LOGIN_RESULT = HERE / ".login-result"    # handed from the login window process to the main window
 DEFAULT_PORT = 8790
 COOKIE_HELP = (
-    "Where to find the cookie (it is your D&D Beyond login; never share it):\n\n"
+    "Manual alternative: paste the value of your D&D Beyond 'CobaltSession' cookie.\n\n"
     "Firefox:  open dndbeyond.com, press F12, tab 'Storage', 'Cookies', 'https://www.dndbeyond.com',\n"
     "          row 'CobaltSession' - copy its Value.\n"
     "Chrome / Edge:  open dndbeyond.com, press F12, tab 'Application', 'Cookies',\n"
-    "          'https://www.dndbeyond.com', row 'CobaltSession' - copy its Value.\n\n"
-    "It expires after a few weeks; then paste a fresh one here."
+    "          'https://www.dndbeyond.com', row 'CobaltSession' - copy its Value."
 )
 
-EVENTS = queue.Queue()          # messages from the relay thread to the window
+EVENTS = queue.Queue()          # messages from worker threads to the window
 RECENT = deque(maxlen=30)       # normalized rolls, replayed to a panel when it connects
 SEEN = deque(maxlen=2000)       # message ids, to drop replays after a reconnect
 CLIENTS = set()                 # connected Owlbear panels
@@ -105,7 +107,7 @@ def save_config(cfg):
 def fetch_token(cobalt):
     req = urllib.request.Request(AUTH_URL, data=b"{}", method="POST", headers={
         "Cookie": f"CobaltSession={cobalt}", "Content-Type": "application/json", "User-Agent": UA,
-        "Accept": "application/json", "Origin": "https://www.dndbeyond.com", "Referer": "https://www.dndbeyond.com/",
+        "Accept": "application/json", "Origin": DDB, "Referer": DDB + "/",
     })
     with urllib.request.urlopen(req, timeout=20) as r:
         body = json.loads(r.read().decode())
@@ -116,6 +118,45 @@ def fetch_token(cobalt):
     payload += "=" * (-len(payload) % 4)
     claims = json.loads(base64.urlsafe_b64decode(payload).decode())
     return token, ttl, str(claims.get(NAMEID_CLAIM) or "")
+
+
+# ---------------------------------------------------------------- login window (runs as its own process)
+def run_login():
+    """Opens D&D Beyond's sign-in page in an embedded browser window and waits for the session cookie."""
+    try:
+        import webview
+    except ImportError:
+        return 2
+    found = {}
+
+    def poll(w):
+        for _ in range(900):  # up to 15 minutes
+            time.sleep(1)
+            try:
+                for jar in w.get_cookies():
+                    for name, morsel in jar.items():
+                        if name == "CobaltSession" and len(morsel.value) >= 20:
+                            found["v"] = morsel.value
+            except Exception:
+                pass
+            if found:
+                break
+        try:
+            w.destroy()
+        except Exception:
+            pass
+
+    w = webview.create_window("Sign in to D&D Beyond", f"{DDB}/sign-in?returnUrl=%2Fmy-campaigns", width=640, height=780)
+    # Own browser profile next to the program, so it never collides with another WebView2 user.
+    webview.start(poll, w, private_mode=False, storage_path=str(HERE / ".webview"))
+    if found:
+        LOGIN_RESULT.write_text(found["v"])
+        return 0
+    return 1
+
+
+def login_command():
+    return [sys.executable, "--login"] if FROZEN else [sys.executable, str(Path(__file__).resolve()), "--login"]
 
 
 # ---------------------------------------------------------------- roll normalisation
@@ -177,7 +218,7 @@ async def send_all(obj):
 
 async def client_handler(ws):
     CLIENTS.add(ws)
-    log(f"Owlbear panel connected ({len(CLIENTS)} total)")
+    log(f"Owlbear connected ({len(CLIENTS)} tab{'s' if len(CLIENTS) != 1 else ''})")
     try:
         await ws.send(json.dumps({"type": "hello", "version": VERSION, "campaignId": STATE["campaignId"],
                                   "connected": STATE["connected"], "recent": list(RECENT)}))
@@ -187,7 +228,7 @@ async def client_handler(ws):
         pass
     finally:
         CLIENTS.discard(ws)
-        log(f"Owlbear panel disconnected ({len(CLIENTS)} total)")
+        log(f"Owlbear disconnected ({len(CLIENTS)} tab{'s' if len(CLIENTS) != 1 else ''})")
 
 
 async def set_status(connected, text, error=""):
@@ -205,8 +246,8 @@ async def game_log(cfg):
         try:
             token, ttl, user_id = await asyncio.to_thread(fetch_token, cfg["cobalt"])
         except urllib.error.HTTPError as e:
-            msg = f"D&D Beyond rejected the session cookie (HTTP {e.code}). It has probably expired: paste a fresh one and click Save & connect."
-            log(msg); await set_status(False, msg, msg); await asyncio.sleep(120); continue
+            msg = f"D&D Beyond no longer accepts the saved session (HTTP {e.code}). Click 'Sign in to D&D Beyond' again."
+            log(msg); emit("signin_needed", None); await set_status(False, msg, msg); return
         except Exception as e:
             msg = f"Could not reach D&D Beyond: {e}"
             log(msg); await set_status(False, msg, msg); await asyncio.sleep(backoff[min(attempt, len(backoff) - 1)]); attempt += 1; continue
@@ -215,7 +256,7 @@ async def game_log(cfg):
         lifetime = max(30, ttl - 40)  # reconnect with a fresh token before this one expires
         opened = time.time()
         try:
-            async with websockets.connect(url, additional_headers={"Origin": "https://www.dndbeyond.com", "User-Agent": UA},
+            async with websockets.connect(url, additional_headers={"Origin": DDB, "User-Agent": UA},
                                           ping_interval=20, ping_timeout=20, max_size=4 * 1024 * 1024) as ws:
                 await set_status(True, f"Connected. Listening to campaign {cfg['campaignId']} - roll something in D&D Beyond.")
                 log(f"Connected to campaign {cfg['campaignId']} as user {user_id}")
@@ -295,53 +336,98 @@ class Relay:
 # ---------------------------------------------------------------- window
 def run_gui():
     import tkinter as tk
-    from tkinter import ttk, messagebox
+    from tkinter import ttk, messagebox, simpledialog
 
     cfg = load_config()
     relay = Relay()
 
     root = tk.Tk()
     root.title(f"Beyond Relay {VERSION}")
-    root.minsize(560, 420)
+    root.minsize(580, 440)
     frm = ttk.Frame(root, padding=12)
     frm.pack(fill="both", expand=True)
     frm.columnconfigure(1, weight=1)
 
     ttk.Label(frm, text="Shows your D&D Beyond campaign's rolls in Owlbear. Keep this window open while playing.",
-              wraplength=520).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+              wraplength=540).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
 
     ttk.Label(frm, text="Campaign link").grid(row=1, column=0, sticky="w")
-    campaign_var = tk.StringVar(value=f"https://www.dndbeyond.com/campaigns/{cfg['campaignId']}" if cfg.get("campaignId") else "")
+    campaign_var = tk.StringVar(value=f"{DDB}/campaigns/{cfg['campaignId']}" if cfg.get("campaignId") else "")
     ttk.Entry(frm, textvariable=campaign_var).grid(row=1, column=1, columnspan=2, sticky="ew", pady=2)
 
-    ttk.Label(frm, text="Session cookie").grid(row=2, column=0, sticky="w")
-    cookie_var = tk.StringVar(value=cfg.get("cobalt") or "")
-    ttk.Entry(frm, textvariable=cookie_var, show="*").grid(row=2, column=1, sticky="ew", pady=2)
-    ttk.Button(frm, text="Where is it?", command=lambda: messagebox.showinfo("Session cookie", COOKIE_HELP)).grid(row=2, column=2, padx=(6, 0))
-
-    btn = ttk.Button(frm, text="Save & connect")
-    btn.grid(row=3, column=1, sticky="w", pady=(8, 0))
+    ttk.Label(frm, text="D&D Beyond login").grid(row=2, column=0, sticky="w")
+    login_var = tk.StringVar(value="Signed in (session saved)" if clean_cookie(cfg.get("cobalt")) else "Not signed in")
+    ttk.Label(frm, textvariable=login_var).grid(row=2, column=1, sticky="w")
+    btns = ttk.Frame(frm); btns.grid(row=3, column=1, columnspan=2, sticky="w", pady=(6, 0))
+    signin_btn = ttk.Button(btns, text="Sign in to D&D Beyond")
+    signin_btn.pack(side="left")
+    connect_btn = ttk.Button(btns, text="Save & connect")
+    connect_btn.pack(side="left", padx=(8, 0))
+    paste_btn = ttk.Button(btns, text="Paste cookie instead...")
+    paste_btn.pack(side="left", padx=(8, 0))
 
     status_var = tk.StringVar(value="Not connected")
-    status_lbl = ttk.Label(frm, textvariable=status_var, wraplength=520)
+    status_lbl = ttk.Label(frm, textvariable=status_var, wraplength=540)
     status_lbl.grid(row=4, column=0, columnspan=3, sticky="w", pady=(10, 4))
 
     logbox = tk.Text(frm, height=12, state="disabled", wrap="word")
     logbox.grid(row=5, column=0, columnspan=3, sticky="nsew")
     frm.rowconfigure(5, weight=1)
-    ttk.Label(frm, text=f"Settings are saved next to this program. Local endpoint ws://127.0.0.1:{cfg.get('port') or DEFAULT_PORT}",
-              foreground="#777").grid(row=6, column=0, columnspan=3, sticky="w", pady=(6, 0))
+    ttk.Label(frm, text=f"Settings stay on this computer (beyond-relay.json next to this program). Local endpoint ws://127.0.0.1:{cfg.get('port') or DEFAULT_PORT}",
+              foreground="#777", wraplength=540).grid(row=6, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
     def connect():
-        cid, cookie = parse_campaign(campaign_var.get()), clean_cookie(cookie_var.get())
+        cid, cookie = parse_campaign(campaign_var.get()), clean_cookie(cfg.get("cobalt"))
         if not cid:
-            messagebox.showerror("Campaign link", "Paste your campaign link, e.g. https://www.dndbeyond.com/campaigns/1234567"); return
+            messagebox.showerror("Campaign link", f"Paste your campaign link, e.g. {DDB}/campaigns/1234567"); return
         if not cookie:
-            messagebox.showerror("Session cookie", "Paste the value of the CobaltSession cookie.\n\n" + COOKIE_HELP); return
-        cfg.update({"campaignId": cid, "cobalt": cookie, "port": int(cfg.get("port") or DEFAULT_PORT)})
+            messagebox.showinfo("Sign in", "Click 'Sign in to D&D Beyond' first."); return
+        cfg.update({"campaignId": cid, "port": int(cfg.get("port") or DEFAULT_PORT)})
         save_config(cfg)
         relay.start(cfg)
-    btn.configure(command=connect)
+
+    def got_cookie(cookie):
+        cfg["cobalt"] = cookie
+        save_config(cfg)
+        login_var.set("Signed in (session saved)")
+        if parse_campaign(campaign_var.get()):
+            connect()
+        else:
+            status_var.set("Signed in. Now paste the campaign link and click Save & connect.")
+
+    def sign_in():
+        signin_btn.configure(state="disabled")
+        status_var.set("A D&D Beyond sign-in window is open. Log in there; this window continues by itself.")
+        status_lbl.configure(foreground="#333")
+        try:
+            LOGIN_RESULT.unlink()
+        except FileNotFoundError:
+            pass
+
+        def wait():
+            try:
+                code = subprocess.run(login_command(), timeout=1000).returncode
+            except Exception as e:
+                code = -1; log(f"Sign-in window failed: {e!r}")
+            cookie = ""
+            try:
+                cookie = clean_cookie(LOGIN_RESULT.read_text()); LOGIN_RESULT.unlink()
+            except FileNotFoundError:
+                pass
+            EVENTS.put(("login_done", (code, cookie)))
+        threading.Thread(target=wait, daemon=True).start()
+
+    def paste_cookie():
+        v = simpledialog.askstring("Session cookie", COOKIE_HELP + "\n\nCobaltSession value:", show="*", parent=root)
+        c = clean_cookie(v)
+        if c:
+            got_cookie(c)
+        elif v is not None:
+            messagebox.showerror("Session cookie", "That does not look like the cookie value.")
+
+    signin_btn.configure(command=sign_in)
+    connect_btn.configure(command=connect)
+    paste_btn.configure(command=paste_cookie)
 
     def pump():
         try:
@@ -351,6 +437,17 @@ def run_gui():
                     text, ok = payload
                     status_var.set(text)
                     status_lbl.configure(foreground="#2a9d4a" if ok else "#c0392b" if ok is False else "#333")
+                elif kind == "signin_needed":
+                    login_var.set("Session expired - sign in again")
+                elif kind == "login_done":
+                    code, cookie = payload
+                    signin_btn.configure(state="normal")
+                    if cookie:
+                        got_cookie(cookie)
+                    elif code == 2:
+                        status_var.set("No embedded browser available on this system. Use 'Paste cookie instead...'.")
+                    else:
+                        status_var.set("Sign-in window closed without a login. Try again, or use 'Paste cookie instead...'.")
                 else:
                     logbox.configure(state="normal")
                     logbox.insert("end", f"[{datetime.now():%H:%M:%S}] {payload}\n")
@@ -387,6 +484,8 @@ def run_console():
 
 
 if __name__ == "__main__":
+    if "--login" in sys.argv:
+        sys.exit(run_login())
     if "--console" in sys.argv:
         sys.exit(run_console())
     try:
