@@ -182,3 +182,24 @@ State: extension v0.7.0 and relay 0.9.0 live and working (user confirmed fast HP
 4. Music per map: check existing Owlbear extensions first; otherwise a separate extension.
 Known open issue: a player acting in a stale sheet can overwrite a DM HP edit (mitigated by
 auto-reload of sheets opened from the character list).
+
+## Monsters: research and decisions (2026-11-09)
+Source: GET https://monster-service.dndbeyond.com/v1/Monster?search=<q>&skip=0&take=<n>[&sources=<id>]
+(no login needed; no CORS, so it goes through the relay). accessType per id: 1 = free with full stats,
+4 = no access (search shows the name, HP/AC come back as 0). Basic rules: sources 1 (2014, 334) and 147
+(2024, 510) -> 668 free monsters. Lookups from https://www.dndbeyond.com/api/config/json:
+challengeRatings (id -> proficiencyBonus), abilitySkills (id -> name, stat).
+
+Parsing measured over all 668 free monsters (both 2014 and 2024 wording):
+- attack bonus 960/960; every dice expression extractable; damage incl. type fully parsed in 1133/1168
+  entries (misses: riders, healing, "lightning or thunder"); saves 436 entries.
+- structured fields: ability scores 668/668, hit dice 668/668, save proficiencies (bonus = mod + PB of CR,
+  plus bonusModifier if set), skills with final value, initiativeBonus 329 (else Dex mod), recharge 154.
+- Multiattack is free prose (simple pattern resolves only 152/322) -> NOT automated: show the sentence as a
+  note above the attack buttons; dice inside it (e.g. Violet Fungus "1d4 Rotting Touch attacks") clickable.
+
+Decisions (user):
+- Quick-load in the Battle tab's add row: search via the relay, picking fills name/HP/AC/initiative bonus;
+  locked monsters shown marked, values then typed by hand. (HP average vs rolled: still to decide.)
+- Monster sheet with roll buttons: checks, saves, skills, initiative, HP, attacks, damage, recharge.
+- Monster rolls VISIBLE TO EVERYONE by default, with a toggle in the room settings (gear) to hide them.
