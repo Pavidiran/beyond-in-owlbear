@@ -200,6 +200,6 @@ Parsing measured over all 668 free monsters (both 2014 and 2024 wording):
 
 Decisions (user):
 - Quick-load in the Battle tab's add row: search via the relay, picking fills name/HP/AC/initiative bonus;
-  locked monsters shown marked, values then typed by hand. (HP average vs rolled: still to decide.)
+  locked monsters shown marked, values then typed by hand. HP = D&D Beyond's fixed average (no rolling, no toggle).
 - Monster sheet with roll buttons: checks, saves, skills, initiative, HP, attacks, damage, recharge.
 - Monster rolls VISIBLE TO EVERYONE by default, with a toggle in the room settings (gear) to hide them.
