@@ -31,6 +31,11 @@ https://pavidiran.github.io/beyond-in-owlbear/manifest.json
 - Rolls made with D&D Beyond's own dice stay in that player's sheet. Use a dice extension such as
   Dice+ for rolls the whole table should see.
 
+## Logo
+
+The calligraphic B is from the font Great Vibes (SIL Open Font License 1.1, `branding/OFL-GreatVibes.txt`).
+`branding/make_logo.py` regenerates `icon.svg` and the relay's icons.
+
 ## Local testing
 
 Run `serve.ps1` and open http://localhost:8787/sheet.html?ddb=CHARACTER_ID to test the viewer

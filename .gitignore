@@ -9,3 +9,4 @@ relay/.login-result
 relay/.webview/
 relay/relay.log*
 relay/dist/relay.log*
+branding/*.ttf

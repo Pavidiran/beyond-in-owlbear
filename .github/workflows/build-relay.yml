@@ -30,8 +30,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r relay/requirements.txt pyinstaller
-      - run: pyinstaller --onefile --name beyond-relay --windowed relay/relay.py
+      - run: pip install -r relay/requirements.txt pyinstaller pillow
+      - run: pyinstaller --onefile --name beyond-relay --windowed --icon relay/icon.ico relay/relay.py
       - run: mv "${{ matrix.built }}" "${{ matrix.artifact }}"
         shell: bash
       - uses: actions/upload-artifact@v4
