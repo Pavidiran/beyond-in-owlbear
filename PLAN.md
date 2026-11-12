@@ -213,3 +213,13 @@ game-log-rest-live.../v1/getmessages shows it stored at the top of the history (
 Plan: click in our monster sheet -> Dice+ rolls (3D dice in Owlbear) -> its result is posted by the relay as
 a monster roll (public or hidden per the room toggle) -> appears in D&D Beyond's game log and comes back into
 our roll log/Battle tab like player rolls (dedupe by rollId).
+
+## Monster rolls with D&D Beyond's 3D dice: VERIFIED (2026-11-12)
+Sheets animate incoming rolls when: eventType "dice/roll/deferred", viewer's dice visibility "shared" (or
+"self" and own userId), dice renderer ready, tab visible, roll newer than page load. Relay sent a public
+Goblin roll as deferred (persist false) then fulfilled: the user saw the 3D dice in their open sheet.
+Side effect: the roll was filed twice (same rollId): once by the relay, once by the user's open sheet, which
+files a deferred roll carrying its own userId after the dice land (the relay posts with the DM's userId).
+Design: relay sends only "deferred", waits a few seconds for a "fulfilled" with that rollId on the game-log
+feed; only if none arrives (no DM sheet open) does it send the "fulfilled" itself. Our log dedupes by rollId.
+Dice+ no longer needed for monster rolls (optional extra only).
