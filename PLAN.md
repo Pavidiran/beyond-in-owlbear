@@ -203,3 +203,13 @@ Decisions (user):
   locked monsters shown marked, values then typed by hand. HP = D&D Beyond's fixed average (no rolling, no toggle).
 - Monster sheet with roll buttons: checks, saves, skills, initiative, HP, attacks, damage, recharge.
 - Monster rolls VISIBLE TO EVERYONE by default, with a toggle in the room settings (gear) to hide them.
+
+## Monster rolls into D&D Beyond's game log: VERIFIED (2026-11-12)
+D&D Beyond's own map tool rolls monster dice client-side and dispatches a "dice/roll/fulfilled" message with
+context {entityId: <monster id>, entityType: "monster", name, messageScope, messageTarget}. Scope "gameId" =
+everyone, scope "userId" + messageTarget = DM user id = hidden (DM only).
+Test: the relay's game-log websocket sent one hidden Goblin "Scimitar" roll (8); no echo on the socket, but
+game-log-rest-live.../v1/getmessages shows it stored at the top of the history (scope userId).
+Plan: click in our monster sheet -> Dice+ rolls (3D dice in Owlbear) -> its result is posted by the relay as
+a monster roll (public or hidden per the room toggle) -> appears in D&D Beyond's game log and comes back into
+our roll log/Battle tab like player rolls (dedupe by rollId).
