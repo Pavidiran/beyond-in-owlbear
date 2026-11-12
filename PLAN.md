@@ -220,6 +220,9 @@ Sheets animate incoming rolls when: eventType "dice/roll/deferred", viewer's dic
 Goblin roll as deferred (persist false) then fulfilled: the user saw the 3D dice in their open sheet.
 Side effect: the roll was filed twice (same rollId): once by the relay, once by the user's open sheet, which
 files a deferred roll carrying its own userId after the dice land (the relay posts with the DM's userId).
-Design: relay sends only "deferred", waits a few seconds for a "fulfilled" with that rollId on the game-log
-feed; only if none arrives (no DM sheet open) does it send the "fulfilled" itself. Our log dedupes by rollId.
+Verified again with a unique label ("Scimitar 1"): stored twice (relay + DM's open sheet), same rollId;
+D&D Beyond's log display shows it once (merges by rollId).
+DECISION (user): the game log is the truth for rolls; the relay is our only reader/writer of it (HP travels
+via character data instead). Relay always sends "deferred" + "fulfilled"; a roll's identity is its rollId,
+every reader dedupes by it (relay already does). No waiting/timing logic.
 Dice+ no longer needed for monster rolls (optional extra only).
