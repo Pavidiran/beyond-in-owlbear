@@ -21,6 +21,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 import urllib.error
 import urllib.request
 from collections import deque
@@ -39,7 +40,7 @@ for _s in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code
     except Exception:
         pass
 
-VERSION = "0.9.1"
+VERSION = "0.10.0"
 DDB = "https://www.dndbeyond.com"
 AUTH_URL = "https://auth-service.dndbeyond.com/v1/cobalt-token"
 WS_URL = "wss://game-log-api-live.dndbeyond.com/v1"
@@ -608,7 +609,232 @@ def normalize(m):
         t = 0
     return {"type": "roll", "id": d.get("rollId") or m.get("id"), "t": t or int(time.time() * 1000), "who": ctx.get("name") or "?",
             "entityId": str(ctx.get("entityId") or m.get("entityId") or ""), "entityType": ctx.get("entityType") or m.get("entityType"),
-            "action": d.get("action") or "", "userId": str(m.get("userId") or ""), "rolls": rolls}
+            "action": d.get("action") or "", "userId": str(m.get("userId") or ""), "rolls": rolls,
+            # scope "userId" = sent to one person only (the DM): never shown to the players in Owlbear either
+            "hidden": (m.get("messageScope") or ctx.get("messageScope")) == "userId"}
+
+
+# ---------------------------------------------------------------- monsters (D&D Beyond's monster service)
+# Public, no login. accessType per monster id: 1 = full stats, anything else = not available to this
+# account (name only; HP/AC come back as 0). Lookups (CR -> proficiency bonus, stat/skill/movement names)
+# come from D&D Beyond's own config. Parsing coverage measured over all 668 free monsters (see PLAN.md).
+MONSTER_API = "https://monster-service.dndbeyond.com/v1/Monster"
+CONFIG_URL = f"{DDB}/api/config/json"
+_LOOKUPS = {}
+_MONSTERS = {}  # id -> raw monster, for this run
+
+
+def http_json(url, timeout=20):
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode())
+
+
+def lookups():
+    if not _LOOKUPS:
+        c = http_json(CONFIG_URL, 60)
+        _LOOKUPS.update(
+            pb={x["id"]: x.get("proficiencyBonus") or 2 for x in c.get("challengeRatings") or []},
+            cr={x["id"]: x.get("value") for x in c.get("challengeRatings") or []},
+            stat={x["id"]: x.get("key") for x in c.get("stats") or []},
+            skill={x["name"].lower(): x.get("stat") for x in c.get("abilitySkills") or []},
+            move={x["id"]: x.get("name") for x in c.get("movements") or []})
+    return _LOOKUPS
+
+
+def cr_text(cr_id):
+    v = lookups()["cr"].get(cr_id)
+    if v is None:
+        return ""
+    return {0.125: "1/8", 0.25: "1/4", 0.5: "1/2"}.get(v, str(int(v)) if float(v).is_integer() else str(v))
+
+
+def _mod(score):
+    return (int(score or 10) - 10) // 2
+
+
+def _plain(fragment):
+    import html as _html
+    return _html.unescape(re.sub(r"<[^>]+>", "", fragment or "")).replace("\xa0", " ").strip()
+
+
+def monster_init(m):
+    st = {s.get("statId"): s.get("value") for s in m.get("stats") or []}
+    return m["initiativeBonus"] if m.get("initiativeBonus") is not None else _mod(st.get(2))
+
+
+def monster_search(q):
+    from urllib.parse import quote
+    q = (q or "").strip()
+    if len(q) < 2:
+        return {"ok": True, "items": []}
+    j = http_json(f"{MONSTER_API}?search={quote(q)}&skip=0&take=30")
+    acc = j.get("accessType") or {}
+    items = []
+    for m in j.get("data") or []:
+        free = acc.get(str(m.get("id"))) == 1
+        if free:
+            _MONSTERS[str(m["id"])] = m
+        items.append({"id": str(m.get("id")), "name": m.get("name") or "?", "cr": cr_text(m.get("challengeRatingId")),
+                      "legacy": bool(m.get("isLegacy")), "locked": not free,
+                      "hp": m.get("averageHitPoints") if free else None, "ac": m.get("armorClass") if free else None,
+                      "init": monster_init(m) if free else None})
+    ql = q.lower()
+    items.sort(key=lambda x: (x["locked"], x["name"].lower() != ql, not x["name"].lower().startswith(ql), x["name"].lower(), x["legacy"]))
+    return {"ok": True, "items": items[:20]}
+
+
+# One pass over an entry's text: "+4 to hit" / "Attack Roll: +4" become attack buttons, every dice
+# expression becomes a dice button ("5 (1d6 + 2) slashing damage" -> damage, type slashing).
+TOKEN_RE = re.compile(r"(?P<hit>[+\-−]\d+)(?= to hit)|(?<=Attack Roll: )(?P<hit2>[+\-−]\d+)"
+                      r"|(?P<dice>\b\d+d\d+(?:\s*[+\-−]\s*\d+)?)")
+DMG_AFTER = re.compile(r"\)?\s*([A-Za-z]+) damage")
+RECHARGE_RE = re.compile(r"Recharge (\d)(?:\s*[–\-]\s*6)?", re.I)
+
+
+def segments(text):
+    out, pos = [], 0
+    for mt in TOKEN_RE.finditer(text):
+        if mt.start() > pos:
+            out.append(text[pos:mt.start()])
+        if mt.group("dice"):
+            expr = re.sub(r"\s+", "", mt.group("dice")).replace("−", "-")
+            dm = DMG_AFTER.match(text, mt.end())
+            out.append({"dice": expr, "dmg": dm.group(1).lower() if dm else ""})
+        else:
+            out.append({"hit": int((mt.group("hit") or mt.group("hit2")).replace("−", "-"))})
+        pos = mt.end()
+    if pos < len(text):
+        out.append(text[pos:])
+    return out
+
+
+def entries(fragment):
+    out = []
+    for raw in re.findall(r"<p>(.*?)</p>", fragment or "", re.S):
+        nm = re.search(r"<strong>\s*(?:<em>)?\s*(.*?)\s*(?:</em>)?\s*</strong>", raw, re.S)
+        name = _plain(nm.group(1)).rstrip(".").strip() if nm else ""
+        text = _plain(raw)
+        if name and text.startswith(name):
+            text = text[len(name):].lstrip(". ").strip()
+        rc = RECHARGE_RE.search(name)
+        out.append({"name": name, "parts": segments(text), "recharge": int(rc.group(1)) if rc else None})
+    return out
+
+
+def monster_sheet(m):
+    L = lookups()
+    pb = L["pb"].get(m.get("challengeRatingId"), 2)
+    st = {s.get("statId"): s.get("value") or 10 for s in m.get("stats") or []}
+    prof = {s.get("statId"): s.get("bonusModifier") or 0 for s in m.get("savingThrows") or []}
+    abilities = [{"key": L["stat"].get(i, str(i)), "score": st.get(i, 10), "mod": _mod(st.get(i, 10)),
+                  "save": _mod(st.get(i, 10)) + (pb + prof[i] if i in prof else 0), "prof": i in prof} for i in range(1, 7)]
+    skills = []
+    for part in _plain(m.get("skillsHtml")).split(","):  # what D&D Beyond prints; parses for all 417 free monsters with skills
+        sm = re.fullmatch(r"\s*([A-Za-z ]+?)\s*([+\-−])\s*(\d+)\s*", part)
+        if sm:
+            skills.append({"name": sm.group(1), "bonus": int(sm.group(3)) * (-1 if sm.group(2) != "+" else 1)})
+    speed = ", ".join((f"{L['move'].get(x.get('movementId'), '')} " if x.get("movementId") != 1 else "") + f"{x.get('speed')} ft"
+                      + (f" {x['notes']}" if x.get("notes") else "") for x in m.get("movements") or [])
+    groups = [{"title": "Traits", "items": entries(m.get("specialTraitsDescription"))}]
+    for field, title in (("actionsDescription", "Actions"), ("bonusActionsDescription", "Bonus actions"),
+                         ("reactionsDescription", "Reactions"), ("legendaryActionsDescription", "Legendary actions"),
+                         ("mythicActionsDescription", "Mythic actions")):
+        groups.append({"title": title, "items": entries(m.get(field))})
+    return {"id": str(m.get("id")), "name": m.get("name"), "url": m.get("url"), "cr": cr_text(m.get("challengeRatingId")), "pb": pb,
+            "ac": m.get("armorClass"), "acNote": (m.get("armorClassDescription") or "").strip(), "hp": m.get("averageHitPoints"),
+            "hd": (m.get("hitPointDice") or {}).get("diceString"), "speed": speed, "init": monster_init(m),
+            "pp": m.get("passivePerception"), "senses": _plain(m.get("sensesHtml")), "legacy": bool(m.get("isLegacy")),
+            "abilities": abilities, "skills": skills, "groups": [g for g in groups if g["items"]]}
+
+
+def monster_get(mid):
+    mid = str(mid or "")
+    if not re.fullmatch(r"\d+", mid):
+        return {"ok": False, "error": "no monster id"}
+    m = _MONSTERS.get(mid)
+    if not m:
+        j = http_json(f"{MONSTER_API}/{mid}")
+        acc = j.get("accessType")
+        m = j.get("data") or {}
+        if (isinstance(acc, dict) and acc.get(mid) not in (None, 1)) or not m.get("stats"):
+            return {"ok": False, "error": "this monster is not available to you on D&D Beyond"}
+        _MONSTERS[mid] = m
+    return {"ok": True, "monster": monster_sheet(m)}
+
+
+# ---------------------------------------------------------------- monster rolls into D&D Beyond's game log
+# Same message D&D Beyond's own map tool sends (verified 2026-11-12): first "dice/roll/deferred" (open
+# sheets with shared dice animate it in 3D), then the stored "dice/roll/fulfilled" with the same rollId.
+# A DM sheet that animated it files its own copy (same rollId): every reader dedupes by rollId.
+DICE_RE = re.compile(r"^(\d*)d(\d+)(?:([+-])(\d+))?$")
+DIE_SIDES = {4, 6, 8, 10, 12, 20, 100}
+DICE_SETTLE = 4  # seconds between the animation message and the result, as in the verified test
+ROLL_TYPES = {"to hit", "damage", "check", "save", "roll"}  # the types seen in real D&D Beyond rolls
+
+
+def roll_dice(expr):
+    mt = DICE_RE.match(re.sub(r"\s+", "", str(expr or "")).replace("−", "-").lower())
+    if not mt:
+        raise ValueError(f"not a dice expression: {expr}")
+    n, sides = int(mt.group(1) or 1), int(mt.group(2))
+    const = int(mt.group(4) or 0) * (-1 if mt.group(3) == "-" else 1)
+    if not (1 <= n <= 40) or sides not in DIE_SIDES:
+        raise ValueError(f"unsupported dice: {expr}")
+    vals = [secrets.randbelow(sides) + 1 for _ in range(n)]
+    text = "+".join(map(str, vals)) + (f"+{const}" if const > 0 else f"{const}" if const < 0 else "")
+    return {"diceNotation": {"constant": const, "set": [{"count": n, "dice": [{"dieType": f"d{sides}", "dieValue": v} for v in vals],
+                                                         "dieType": f"d{sides}", "operation": 0}]},
+            "result": {"constant": const, "text": text, "total": sum(vals) + const, "values": vals}}
+
+
+async def monster_roll(req):
+    gws = STATE.get("gamews")
+    if not gws or not STATE["connected"]:
+        return {"ok": False, "error": "Beyond Relay is not connected to D&D Beyond right now"}
+    mid, name, action = str(req.get("monsterId") or ""), str(req.get("name") or "Monster")[:60], str(req.get("action") or "")[:60]
+    rtype = req.get("rollType") if req.get("rollType") in ROLL_TYPES else "roll"
+    if not re.fullmatch(r"\d+", mid):
+        return {"ok": False, "error": "no monster id"}
+    try:
+        r = roll_dice(req.get("dice"))
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    game, user = str(STATE["campaignId"]), str(STATE["userId"])
+    scope, target = ("userId", user) if req.get("hidden") else ("gameId", game)
+    roll_id = str(uuid.uuid4())
+    payload = {
+        "data": {"action": action, "context": {"entityId": mid, "entityType": "monster", "messageScope": scope,
+                                               "messageTarget": target, "name": name, "avatarUrl": None},
+                 "rollId": roll_id, "rolls": [{"diceNotation": r["diceNotation"], "rollKind": "", "rollType": rtype, "result": r["result"]}],
+                 "setId": "00101"},
+        "dateTime": str(int(time.time() * 1000)), "entityId": mid, "entityType": "monster", "eventType": ROLL_EVENT,
+        "gameId": game, "id": str(uuid.uuid4()), "messageScope": scope, "messageTarget": target,
+        "persist": True, "source": "Web", "userId": user,
+    }
+    deferred = json.loads(json.dumps(payload))
+    deferred.update(eventType="dice/roll/deferred", persist=False, id=str(uuid.uuid4()))
+    try:
+        await gws.send(json.dumps(deferred))
+    except Exception as e:
+        return {"ok": False, "error": f"could not send the roll to D&D Beyond: {e}"}
+    roll = normalize(payload)
+    asyncio.get_running_loop().create_task(fulfil_later(payload, roll))
+    return {"ok": True, "roll": roll}
+
+
+async def fulfil_later(payload, roll):
+    await asyncio.sleep(DICE_SETTLE)
+    gws = STATE.get("gamews")
+    try:
+        await gws.send(json.dumps(payload))
+    except Exception as e:
+        log(f"Could not store the monster roll in D&D Beyond: {e}")
+    if roll["id"] not in SEEN:  # not yet echoed by the DM's own open sheet
+        SEEN.append(roll["id"])
+        RECENT.append(roll)
+        log(describe(roll) + (" (hidden)" if roll.get("hidden") else ""))
+        await send_all(roll)
 
 
 def describe(roll):
@@ -651,10 +877,27 @@ async def client_handler(ws):
                 msg = json.loads(raw)
             except Exception:
                 continue
-            if isinstance(msg, dict) and msg.get("type") == "hp":
+            if not isinstance(msg, dict):
+                continue
+            t = msg.get("type")
+            if t == "hp":
                 log(f"HP request from Owlbear: {json.dumps({k: msg.get(k) for k in ('entityId', 'delta', 'temp', 'src', 'reqId')})}")
                 result = await change_hp(str(msg.get("entityId") or ""), msg.get("delta"), msg.get("temp"))
                 await ws.send(json.dumps({"type": "hp-result", "reqId": msg.get("reqId"), **result}))
+            elif t in ("monster-search", "monster-get", "monster-roll"):
+                try:
+                    if t == "monster-search":
+                        result = await asyncio.to_thread(monster_search, msg.get("q"))
+                    elif t == "monster-get":
+                        result = await asyncio.to_thread(monster_get, msg.get("id"))
+                    else:
+                        result = await monster_roll(msg)
+                except urllib.error.HTTPError as e:
+                    result = {"ok": False, "error": f"D&D Beyond answered HTTP {e.code}"}
+                except Exception as e:
+                    log(f"{t} failed: {e!r}")
+                    result = {"ok": False, "error": str(e)}
+                await ws.send(json.dumps({"type": "reply", "reqId": msg.get("reqId"), **result}))
     except Exception:
         pass
     finally:
@@ -689,6 +932,7 @@ async def game_log(cfg):
         try:
             async with websockets.connect(url, additional_headers={"Origin": DDB, "User-Agent": UA},
                                           ping_interval=20, ping_timeout=20, max_size=4 * 1024 * 1024) as ws:
+                STATE["gamews"] = ws  # monster rolls are posted on this same connection
                 await set_status(True, f"Connected. Listening to campaign {cfg['campaignId']} - roll something in D&D Beyond.")
                 log(f"Connected to campaign {cfg['campaignId']} as user {user_id}")
                 attempt = 0

@@ -226,3 +226,24 @@ DECISION (user): the game log is the truth for rolls; the relay is our only read
 via character data instead). Relay always sends "deferred" + "fulfilled"; a roll's identity is its rollId,
 every reader dedupes by it (relay already does). No waiting/timing logic.
 Dice+ no longer needed for monster rolls (optional extra only).
+
+## Monsters built: extension 0.8.0, relay 0.10.0 (2026-11-13)
+- Relay: monster-search / monster-get / monster-roll requests (reply {type:"reply", reqId, ok, ...}).
+  Search = monster-service ?search (no login; the DM's session unlocked nothing extra in a test), free
+  results first, exact/prefix match first, 20 shown. Stat block built from D&D Beyond data: saves = mod +
+  PB(CR) + bonusModifier (matches printed blocks), skills parsed from skillsHtml (417/417), initiative =
+  initiativeBonus else Dex mod, entry text split into text + attack buttons + dice buttons (damage type
+  from "... (XdY + Z) <type> damage"), recharge from "(Recharge N-6)".
+- Roll types used: only those seen in real rolls (to hit, damage, check, save, roll); checks/saves use
+  the lowercase ability as action like D&D Beyond ("dex"). Relay rolls the dice (secrets), sends
+  deferred, then fulfilled 4 s later (verified spacing); first copy seen (relay's or the DM sheet's,
+  same values) is forwarded, the rest dropped by rollId. Verified 2026-11-13: hidden Goblin roll stored
+  in getmessages with scope userId.
+- Hidden rolls (scope userId, also players' "to DM" rolls) never enter the room: the DM's background
+  page keeps them in localStorage "bio-hidden-log"; the DM's Rolls tab merges them, marked "hidden".
+- Panel opens its own websocket to the relay (DM only, on first monster action) for requests; stat
+  blocks stay in panel memory, battle rows store only monsterId. Monster initiative rolls set the row
+  with the same name ("Goblin 2").
+- Adding rows still rolls a quick local initiative (and Re-roll enemies); the sheet's Initiative
+  button rolls through D&D Beyond.
+- Not yet: advantage/disadvantage (D&D Beyond's message format for it not captured yet).

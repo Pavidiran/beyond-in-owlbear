@@ -1,9 +1,9 @@
 // Shared between the panel (app.js) and the background page (bg.js).
 export const NS = "com.pavi.beyond-in-owlbear";
 export const KEYS = {
-  cfg: `${NS}/config`,     // { campaignUrl }
+  cfg: `${NS}/config`,     // { campaignUrl, relayCode, monsterHidden }
   log: `${NS}/log`,        // last rolls, newest first
-  battle: `${NS}/battle`,  // { round, turn, entries: [{ id, kind: "pc"|"npc", entityId?, name, init, hp?, maxHp?, bonus? }] }
+  battle: `${NS}/battle`,  // { round, turn, entries: [{ id, kind: "pc"|"npc", entityId?, monsterId?, name, init, hp?, maxHp?, ac?, bonus? }] }
   relay: `${NS}/relay`,    // { connected, note, campaignId, t }
   party: `${NS}/party`,    // { chars: [{ entityId, name, hp, max, temp, dead, stable }], t }  read from D&D Beyond by the relay
 };
@@ -19,6 +19,9 @@ export function cleanRelayCode(code) {
   return `${m[1]}/${m[2]}`;
 }
 export const LOG_MAX = 25;
+// Hidden rolls (sent to the DM only) never go into the room: the DM's background page keeps them in
+// this browser's storage, which the panel (same site) reads.
+export const HIDDEN_LOG = "bio-hidden-log";
 export const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 export const campaignIdOf = (url) => { const m = String(url || "").match(/campaigns\/(\d+)/); return m ? m[1] : ""; };
 export const emptyBattle = () => ({ round: 1, turn: 0, entries: [] });
@@ -28,6 +31,7 @@ export function flattenRoll(roll) {
   return (roll.rolls || []).map((r, i) => {
     const d20 = (r.dice || []).find((x) => x.d === "d20" && x.v != null && x.kept !== false);
     return { id: roll.id + (i ? ":" + i : ""), t: roll.t, who: roll.who, entityId: roll.entityId, action: roll.action || "",
+             monster: roll.entityType === "monster", hidden: !!roll.hidden,
              type: r.type || "roll", kind: r.kind || "", total: r.total, text: r.text || "", notation: r.notation || "",
              nat20: !!d20 && d20.v === 20, nat1: !!d20 && d20.v === 1 };
   });

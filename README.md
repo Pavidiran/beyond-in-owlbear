@@ -66,5 +66,17 @@ verified) unless it is already installed. Only clients that know the code's secr
 Cloudflare gives quick tunnels no uptime guarantee; if one drops, the relay opens a new one and
 shows a new code.
 
+### Monsters (relay 0.10+)
+
+In the Battle tab, type a monster's name in the add row: matching monsters from D&D Beyond's monster
+list appear (free/basic-rules ones and anything your account can open; others are marked with a lock
+and only fill in the name). Picking one fills HP (D&D Beyond's average), AC and initiative bonus.
+Click a monster's name in the battle list to open its stat block: ability checks, saves, skills,
+initiative, attack and damage values are buttons. Each click is rolled by the relay and posted into
+the campaign's D&D Beyond game log as that monster (3D dice in open sheets that show shared dice), so it
+appears in D&D Beyond and in Owlbear like any other roll. Monster rolls are visible to everyone by
+default; *Monster rolls hidden from players* in the gear settings makes them DM-only. Multiattack is
+shown as text (its dice are clickable). Without a running relay, monster search and rolls are unavailable.
+
 Settings and the D&D Beyond login stay in `beyond-relay.json` next to the program. Unofficial
 D&D Beyond feed: may break when D&D Beyond changes things.

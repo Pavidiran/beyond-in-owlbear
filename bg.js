@@ -4,7 +4,7 @@
 // plus a secret, set in the panel's settings), writes every D&D Beyond roll into the room's roll log,
 // puts characters into the battle tracker when they roll initiative, and keeps the relay status in the room.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
-import { NS, KEYS, LOG_MAX, uid, campaignIdOf, flattenRoll, sortEntries, emptyBattle, describe, relayUrl } from "./shared.js?v=0.7.1";
+import { NS, KEYS, LOG_MAX, HIDDEN_LOG, uid, campaignIdOf, flattenRoll, sortEntries, emptyBattle, describe, relayUrl } from "./shared.js?v=0.8.0";
 
 let role = "PLAYER", ws = null, wsUrl = "", relayCampaign = "", retry = null, lastRelay = "", beat = null;
 
@@ -18,22 +18,46 @@ async function writeRelay(connected, note = "") {
   await OBR.room.setMetadata({ [KEYS.relay]: { connected, note, campaignId: relayCampaign, t: Date.now() } });
 }
 
+// Initiative rolls put characters into the battle; a monster's roll sets the initiative of its own
+// row (rows are named like the roll, e.g. "Goblin 2").
+function initiativePatch(m, roll) {
+  if (!/^initiative$/i.test(roll.action || "") || !roll.rolls[0] || roll.rolls[0].total == null) return null;
+  const b = JSON.parse(JSON.stringify(m[KEYS.battle] || emptyBattle()));
+  const init = roll.rolls[0].total;
+  if (roll.entityType === "monster") {
+    const e = b.entries.find((x) => x.kind === "npc" && x.name === roll.who && (!x.monsterId || x.monsterId === roll.entityId));
+    if (!e) return null;
+    e.init = init;
+  } else {
+    const e = b.entries.find((x) => x.kind === "pc" && x.entityId === roll.entityId);
+    if (e) { e.init = init; e.name = roll.who; } else b.entries.push({ id: uid(), kind: "pc", entityId: roll.entityId, name: roll.who, init });
+  }
+  sortEntries(b);
+  return b;
+}
+
+function hiddenLog() { try { return JSON.parse(localStorage.getItem(HIDDEN_LOG) || "[]"); } catch { return []; } }
+
 async function onRoll(roll, replay = false) {
   const m = await meta();
   const wanted = campaignIdOf((m[KEYS.cfg] || {}).campaignUrl);
   if (wanted && relayCampaign && wanted !== relayCampaign) return; // this relay serves another campaign
+  if (roll.hidden) { // for the DM only: stays in this browser, never in the room
+    const log = hiddenLog();
+    const fresh = flattenRoll(roll).filter((e) => !log.some((x) => x.id === e.id));
+    if (!fresh.length) return;
+    try { localStorage.setItem(HIDDEN_LOG, JSON.stringify([...fresh.reverse(), ...log].slice(0, LOG_MAX))); } catch {}
+    const b = initiativePatch(m, roll);
+    if (b) await OBR.room.setMetadata({ [KEYS.battle]: b });
+    if (!replay) for (const e of fresh) OBR.notification.show(`(hidden) ${describe(e)}${e.nat20 ? " (nat 20!)" : e.nat1 ? " (nat 1)" : ""}`).catch(() => {});
+    return;
+  }
   const log = m[KEYS.log] || [];
   const fresh = flattenRoll(roll).filter((e) => !log.some((x) => x.id === e.id));
   if (!fresh.length) return;
   const patch = { [KEYS.log]: [...fresh.reverse(), ...log].slice(0, LOG_MAX) };
-  if (/^initiative$/i.test(roll.action || "") && roll.rolls[0] && roll.rolls[0].total != null) {
-    const b = JSON.parse(JSON.stringify(m[KEYS.battle] || emptyBattle()));
-    const init = roll.rolls[0].total;
-    const e = b.entries.find((x) => x.kind === "pc" && x.entityId === roll.entityId);
-    if (e) { e.init = init; e.name = roll.who; } else b.entries.push({ id: uid(), kind: "pc", entityId: roll.entityId, name: roll.who, init });
-    sortEntries(b);
-    patch[KEYS.battle] = b;
-  }
+  const b = initiativePatch(m, roll);
+  if (b) patch[KEYS.battle] = b;
   await OBR.room.setMetadata(patch);
   if (!replay) OBR.broadcast.sendMessage(`${NS}/roll`, fresh, { destination: "ALL" }).catch(() => {});
 }

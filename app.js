@@ -2,9 +2,10 @@
 // the shared roll log and battle tracker. D&D Beyond handles the sheets; the rolls arrive through
 // Beyond Relay on the DM's computer (see bg.js), initiative rolls fill the battle tracker.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
-import { NS, KEYS, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode } from "./shared.js?v=0.7.1";
+import { NS, KEYS, HIDDEN_LOG, LOG_MAX, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode, relayUrl } from "./shared.js?v=0.8.0";
 
-const VERSION = "0.7.1";
+const VERSION = "0.8.0";
+const RELAY_MIN = "0.10.0"; // monster search, sheets and rolls need this Beyond Relay version
 const SIZES = { compact: [440, 620], tall: [440, 900], wide: [620, 900] };
 const DDB = "https://www.dndbeyond.com";
 const HOME = `${DDB}/characters`; // "My characters": each player picks their own sheet there
@@ -16,7 +17,15 @@ let ME = { id: "", name: "", role: "PLAYER" }, META = {};
 let PREF = { zoom: 0.8, size: "tall", last: "", drawer: "" };
 try { Object.assign(PREF, JSON.parse(localStorage.getItem("bio-pref") || "{}")); } catch {}
 const savePref = () => { try { localStorage.setItem("bio-pref", JSON.stringify(PREF)); } catch {} };
-const UI = { confirmClear: 0 };
+const UI = {
+  confirmClear: 0,
+  add: { name: "", hp: "", ac: "", bonus: "", count: "" }, // Battle add row (kept across redraws)
+  search: { q: "", items: [], busy: false, err: "" },      // monster search results for the add row
+  pick: null,                                              // { id, name } of the picked monster
+  sheet: null,                                             // { entryId } of the open monster sheet
+  last: "",                                                // last monster roll, shown in the sheet
+};
+const MON = {}; // monster id -> stat block from the relay (this panel session)
 
 // Room storage: Owlbear room metadata, or localStorage when testing outside Owlbear.
 const MOCK = "bio-mock-meta";
@@ -35,6 +44,52 @@ const room = LOCAL ? {
 const config = () => META[KEYS.cfg] || { campaignUrl: "" };
 const battle = () => META[KEYS.battle] || emptyBattle();
 const parseCampaign = (t) => { const m = String(t || "").match(/campaigns\/(\d{3,})/); return m ? `${DDB}/campaigns/${m[1]}` : ""; };
+
+// ------------------------------------------------------------------ direct line to Beyond Relay (DM panel only)
+// Requests (monster search, stat blocks, monster rolls) go straight from this panel to the relay; the
+// background page keeps handling the roll feed. Opened on first use.
+let rws = null, rwsUrl = "", ropen = null, rreq = 0, relayVer = "";
+const rwait = new Map();
+const verOk = (v) => { const a = String(v || "0").split(".").map(Number), b = RELAY_MIN.split(".").map(Number); for (let i = 0; i < 3; i++) { if ((a[i] || 0) !== b[i]) return (a[i] || 0) > b[i]; } return true; };
+function relaySock() {
+  const url = (LOCAL && new URLSearchParams(location.search).get("relay")) || relayUrl(config().relayCode);
+  if (!url) return Promise.reject(new Error("No relay code set: start Beyond Relay and paste its code in ⚙"));
+  if (rws && rwsUrl === url && rws.readyState === 1) return Promise.resolve(rws);
+  if (ropen && rwsUrl === url) return ropen;
+  if (rws) { rws.onclose = null; try { rws.close(); } catch {} rws = null; }
+  rwsUrl = url; relayVer = "";
+  const s = new WebSocket(url); rws = s;
+  ropen = new Promise((res, rej) => {
+    const t = setTimeout(() => { rej(new Error("Beyond Relay doesn't answer. Is it running, with this code?")); try { s.close(); } catch {} }, 12000);
+    s.onmessage = (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch { return; }
+      if (m.type === "hello") { relayVer = m.version || "0"; clearTimeout(t); res(s); return; }
+      if (m.type === "reply" && rwait.has(m.reqId)) { const w = rwait.get(m.reqId); rwait.delete(m.reqId); w.resolve(m); }
+    };
+    s.onerror = () => {};
+    s.onclose = (ev) => {
+      clearTimeout(t);
+      if (rws === s) { rws = null; ropen = null; }
+      rej(new Error(ev.code === 4001 ? "Wrong relay code: copy the current one from the Beyond Relay window" : "Can't reach Beyond Relay. Is it running?"));
+      for (const [, w] of rwait) w.reject(new Error("The connection to Beyond Relay closed"));
+      rwait.clear();
+    };
+  });
+  ropen.then(() => { ropen = null; }, () => { ropen = null; });
+  return ropen;
+}
+async function relayCall(type, data, ms = 20000) {
+  const s = await relaySock();
+  if (!verOk(relayVer)) throw new Error(`Monsters need Beyond Relay ${RELAY_MIN} or newer (running: ${relayVer}). Download the new version.`);
+  const reqId = ++rreq;
+  const m = await new Promise((resolve, reject) => {
+    const t = setTimeout(() => { rwait.delete(reqId); reject(new Error("Beyond Relay took too long to answer")); }, ms);
+    rwait.set(reqId, { resolve: (x) => { clearTimeout(t); resolve(x); }, reject: (e) => { clearTimeout(t); reject(e); } });
+    s.send(JSON.stringify({ type, reqId, ...data }));
+  });
+  if (!m.ok) throw new Error(m.error || "Beyond Relay couldn't do that");
+  return m;
+}
 
 // ------------------------------------------------------------------ sheet frame
 // The frame is cross-origin, so the browser never tells us its address: we only know the page we
@@ -130,7 +185,8 @@ async function updateBattle(fn) {
   await room.set({ [KEYS.battle]: b });
   return b;
 }
-const d20 = () => 1 + Math.floor(Math.random() * 20);
+const rollD20 = () => 1 + Math.floor(Math.random() * 20); // quick enemy initiative when adding rows
+function closeSheet() { UI.sheet = null; renderSheet(); }
 async function announceTurn(b) {
   const e = b.entries[b.turn]; if (!e) return;
   await room.send(`${NS}/turn`, { name: e.name, round: b.round || 1 }).catch(() => {});
@@ -159,14 +215,15 @@ function relayState() {
   return { cls: "off", text: "D&D Beyond rolls are not live (the DM's relay is off)" };
 }
 
+function hiddenLog() { if (ME.role !== "GM") return []; try { return JSON.parse(localStorage.getItem(HIDDEN_LOG) || "[]"); } catch { return []; } }
 function renderLog() {
-  const log = META[KEYS.log] || [];
+  const log = [...(META[KEYS.log] || []), ...hiddenLog()].sort((a, b) => (b.t || 0) - (a.t || 0)).slice(0, LOG_MAX);
   if (!log.length) return `<div class="muted pad">No rolls yet. Roll in a D&D Beyond sheet of this campaign.</div>`;
   return log.map((e) => {
     const time = new Date(e.t || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     const cls = e.nat20 ? " nat20" : e.nat1 ? " nat1" : "";
     const what = e.action && e.action.toLowerCase() !== (e.type || "").toLowerCase() ? `${esc(e.action)} <span class="muted">${esc(e.type)}</span>` : esc(e.action || e.type);
-    return `<div class="le${cls}"><span class="who">${esc(e.who)}</span> ${what}<span class="tot">${esc(e.total)}</span>${e.nat20 ? " <b>nat 20</b>" : e.nat1 ? " <b>nat 1</b>" : ""}<div class="det">${esc(e.text)}<span>${time}</span></div></div>`;
+    return `<div class="le${cls}${e.hidden ? " hid" : ""}"><span class="who">${esc(e.who)}</span>${e.hidden ? `<span class="htag" title="Only you see this roll">hidden</span>` : ""} ${what}<span class="tot">${esc(e.total)}</span>${e.nat20 ? " <b>nat 20</b>" : e.nat1 ? " <b>nat 1</b>" : ""}<div class="det">${esc(e.text)}<span>${time}</span></div></div>`;
   }).join("");
 }
 
@@ -251,7 +308,7 @@ function renderBattle() {
     } else if (down) hp = `<span class="muted">down</span>`;
     else if (e.kind === "pc") hp = condChips(pc) + deathSaves(pc) + hpBadge(pc);
     return `<div class="brow${cur ? " cur" : ""}${down ? " down" : ""}${e.kind === "pc" ? " pc" : ""}"${isGM ? ` data-act="bSetTurn" data-i="${i}"` : ""}>
-      <span class="mk">${cur ? "▶" : ""}</span><span class="bi">${init}</span><span class="bn">${esc(e.name)}</span>${ac}${hp}
+      <span class="mk">${cur ? "▶" : ""}</span><span class="bi">${init}</span>${isGM && e.monsterId ? `<span class="bn mlink" data-act="mOpen" data-id="${e.id}" title="Open the stat block and roll for ${esc(e.name)}">${esc(e.name)}</span>` : `<span class="bn">${esc(e.name)}</span>`}${ac}${hp}
       ${isGM ? `<button class="ic ghost" data-act="bRemove" data-id="${e.id}" title="Remove">×</button>` : ""}</div>`;
   }).join("");
   const empty = !b.entries.length ? `<div class="muted pad">Nobody in the fight yet. Players: roll Initiative in your D&D Beyond sheet.${isGM ? " Add enemies below." : ""}</div>` : "";
@@ -264,14 +321,91 @@ function renderBattle() {
       <button data-act="bReroll" ${b.entries.some((e) => e.kind === "npc") ? "" : "disabled"} title="Re-roll initiative for all enemies">Re-roll enemies</button>
       <button class="ghost" data-act="bClear" ${b.entries.length ? "" : "disabled"}>${UI.confirmClear > Date.now() ? "Really clear?" : "Clear"}</button></div>
     <div class="badd">
-      <input type="text" id="bName" placeholder="Enemy name">
-      <input type="number" id="bHpN" placeholder="HP" min="1">
-      <input type="number" id="bAc" placeholder="AC" min="1">
-      <input type="number" id="bBonus" placeholder="init +">
-      <input type="number" id="bCount" placeholder="×1" min="1" max="30">
-      <button data-act="bAdd">Add</button></div>`
+      <input type="text" id="bName" placeholder="Enemy name or monster search" autocomplete="off" value="${esc(UI.add.name)}">
+      <input type="number" id="bHpN" placeholder="HP" min="1" value="${esc(UI.add.hp)}">
+      <input type="number" id="bAc" placeholder="AC" min="1" value="${esc(UI.add.ac)}">
+      <input type="number" id="bBonus" placeholder="init +" value="${esc(UI.add.bonus)}">
+      <input type="number" id="bCount" placeholder="×1" min="1" max="30" value="${esc(UI.add.count)}">
+      <button data-act="bAdd">Add</button></div>${renderSearch()}`
     : `<div class="muted pad">Round ${b.round || 1}${now ? ` · ${esc(now.name)}'s turn` : ""}</div>`;
   return rows + empty + ctrl;
+}
+
+// Monster search results under the add row (D&D Beyond's monster list, through the relay).
+function renderSearch() {
+  const s = UI.search;
+  if (UI.pick && UI.pick.name === UI.add.name) return `<div class="muted msr-note">${UI.pick.id ? "From D&amp;D Beyond. After adding, click the name in the list to roll for it." : "Not on your D&amp;D Beyond account: type HP and AC yourself."}</div>`;
+  if (!s.q || s.q !== UI.add.name.trim()) return "";
+  if (s.err) return `<div class="muted msr-note">${esc(s.err)}</div>`;
+  if (s.busy && !s.items.length) return `<div class="muted msr-note">Searching D&amp;D Beyond...</div>`;
+  if (!s.items.length) return `<div class="muted msr-note">No monster called “${esc(s.q)}” on D&amp;D Beyond. Add it by hand.</div>`;
+  return `<div class="msr">${s.items.map((x, i) => `<button class="mres${x.locked ? " locked" : ""}" data-act="mPick" data-i="${i}" title="${x.locked ? "Not available on your D&D Beyond account: only the name is filled in" : "Fill in HP, AC and initiative bonus"}">` +
+    `<span class="mn">${esc(x.name)}</span><span class="muted">${x.cr ? `CR ${esc(x.cr)}` : ""}${x.legacy ? " · Legacy" : ""}</span>` +
+    `<span class="mv">${x.locked ? "🔒" : `HP ${x.hp} · AC ${x.ac}`}</span></button>`).join("")}</div>`;
+}
+let searchT = null;
+function onSearchInput() {
+  clearTimeout(searchT);
+  const q = UI.add.name.trim();
+  if (UI.pick && UI.pick.name !== UI.add.name) UI.pick = null;
+  if (q.length < 2 || ME.role !== "GM") { UI.search = { q: "", items: [], busy: false, err: "" }; renderDrawer(); return; }
+  searchT = setTimeout(async () => {
+    UI.search = { q, items: UI.search.q === q ? UI.search.items : [], busy: true, err: "" }; renderDrawer();
+    try {
+      const r = await relayCall("monster-search", { q });
+      if (UI.add.name.trim() === q) { UI.search = { q, items: r.items || [], busy: false, err: "" }; renderDrawer(); }
+    } catch (e) {
+      if (UI.add.name.trim() === q) { UI.search = { q, items: [], busy: false, err: `Monster search: ${e.message}` }; renderDrawer(); }
+    }
+  }, 350);
+}
+
+// ------------------------------------------------------------------ monster sheet (DM): stat block with roll buttons
+const sgn = (n) => (n >= 0 ? `+${n}` : `−${-n}`);
+const d20 = (n) => `1d20${n >= 0 ? "+" : "-"}${Math.abs(n)}`;
+const rollBtn = (label, dice, type, action, title = "", cls = "") =>
+  `<button class="mroll${cls}" data-act="mRoll" data-dice="${esc(dice)}" data-type="${esc(type)}" data-action="${esc(action)}" title="${esc(title || `${action}: ${dice}`)}">${label}</button>`;
+function renderSheet() {
+  const el = $("msheet");
+  const entry = UI.sheet && battle().entries.find((e) => e.id === UI.sheet.entryId);
+  if (!entry || ME.role !== "GM") { if (!el.hidden) { el.hidden = true; el.innerHTML = ""; el.__html = ""; } UI.sheet = null; return; }
+  const m = MON[entry.monsterId];
+  let html = `<div class="mhead"><span class="mt">${esc(entry.name)}</span>${m ? `<span class="muted">${esc(m.name)}${m.cr ? ` · CR ${esc(m.cr)}` : ""}${m.legacy ? " · Legacy" : ""}</span>` : ""}` +
+    `<span class="spacer"></span>${m && m.url ? `<button class="ic ghost" data-act="mPage" title="D&amp;D Beyond page of this monster (new tab)">↗</button>` : ""}<button class="ic" data-act="mClose" title="Close">×</button></div>`;
+  if (!m) html += `<div class="muted pad">${esc(UI.sheet.err || "Loading the stat block from D&D Beyond...")}</div>`;
+  else {
+    const vis = config().monsterHidden ? "Rolls are hidden: only you see them" : "Rolls are visible to everyone";
+    html += `<div class="mstat"><b>AC ${esc(entry.ac ?? m.ac)}</b>${m.acNote ? ` <span class="muted">${esc(m.acNote)}</span>` : ""}<i class="sep">·</i>` +
+      hpBadge({ name: entry.name, hp: entry.hp || 0, max: entry.maxHp || 0, temp: 0 }) + `<i class="sep">·</i>${esc(m.speed)}` +
+      (m.senses ? `<i class="sep">·</i>${esc(m.senses)}` : "") + (m.pp != null ? `<i class="sep">·</i>Passive Perception ${esc(m.pp)}` : "") + `</div>` +
+      `<div class="mline">${rollBtn(`Initiative ${sgn(m.init)}`, d20(m.init), "roll", "Initiative", "Roll initiative: sets this row's place in the battle")}` +
+      `<span class="muted" title="Change in the room settings (gear icon)">${vis} (⚙)</span></div>` +
+      `<div class="mabil">${m.abilities.map((a) => `<div class="mab"><b>${esc(a.key)}</b>` +
+        rollBtn(`${a.score} (${sgn(a.mod)})`, d20(a.mod), "check", a.key.toLowerCase(), `${a.key} check`) +
+        rollBtn(`save ${sgn(a.save)}`, d20(a.save), "save", a.key.toLowerCase(), `${a.key} saving throw${a.prof ? " (proficient)" : ""}`, a.prof ? " sv prof" : " sv") +
+        `</div>`).join("")}</div>` +
+      (m.skills.length ? `<div class="mskills">${m.skills.map((s) => rollBtn(`${esc(s.name)} ${sgn(s.bonus)}`, d20(s.bonus), "check", s.name, `${s.name} check`)).join("")}</div>` : "") +
+      `<div class="mlast${UI.last ? "" : " empty"}">${esc(UI.last || "Click a value to roll it in D&D Beyond (3D dice in open sheets).")}</div>` +
+      m.groups.map((g) => `<div class="mgrp"><div class="mgt">${esc(g.title)}</div>${g.items.map((it) => {
+        const name = it.name ? `<b>${esc(it.recharge ? it.name.replace(/\s*\(Recharge[^)]*\)/i, "") : it.name)}.</b> ` : "";
+        const range = it.recharge && it.recharge < 6 ? `${it.recharge}–6` : `${it.recharge}`;
+        const rc = it.recharge ? rollBtn(`Recharge ${range}`, "1d6", "roll", `${it.name} recharge`, `Roll 1d6: recharges on ${range}`) + " " : "";
+        const body = it.parts.map((p) => typeof p === "string" ? esc(p)
+          : p.hit != null ? rollBtn(sgn(p.hit), d20(p.hit), "to hit", it.name || "Attack", `${it.name} attack roll`)
+          : rollBtn(esc(p.dice), p.dice, p.dmg ? "damage" : "roll", it.name || "Roll", p.dmg ? `${it.name}: ${p.dice} ${p.dmg} damage` : `${it.name}: ${p.dice}`)).join("");
+        return `<p>${name}${rc}${body}</p>`;
+      }).join("")}</div>`).join("");
+  }
+  if (el.__html !== html) { el.__html = html; el.innerHTML = html; } // unchanged: leave the buttons alone
+  el.hidden = false;
+}
+async function openSheet(entryId) {
+  const entry = battle().entries.find((e) => e.id === entryId); if (!entry || !entry.monsterId) return;
+  UI.sheet = { entryId }; UI.last = ""; showPicker(false); renderSheet();
+  if (MON[entry.monsterId]) return;
+  try { MON[entry.monsterId] = (await relayCall("monster-get", { id: entry.monsterId })).monster; }
+  catch (e) { if (UI.sheet && UI.sheet.entryId === entryId) UI.sheet.err = `Couldn't load the stat block: ${e.message}`; }
+  renderSheet();
 }
 
 let pressing = false, renderWaiting = false;
@@ -301,7 +435,7 @@ function renderPicker() {
     `<div class="muted">Sheets opened from this list reload by themselves when the DM changes their HP.</div>`;
 }
 function showPicker(on) { $("picker").hidden = !on; renderPicker(); }
-function renderAll() { renderBar(); renderDrawer(); renderPicker(); }
+function renderAll() { renderBar(); renderDrawer(); renderPicker(); renderSheet(); }
 
 // ------------------------------------------------------------------ actions
 async function onAction(act, el) {
@@ -314,14 +448,14 @@ async function onAction(act, el) {
     case "zoomOut": PREF.zoom = Math.max(0.5, +(PREF.zoom - 0.05).toFixed(2)); savePref(); layout(); break;
     case "zoomIn": PREF.zoom = Math.min(1.2, +(PREF.zoom + 0.05).toFixed(2)); savePref(); layout(); break;
     case "size": PREF.size = PREF.size === "compact" ? "tall" : PREF.size === "tall" ? "wide" : "compact"; savePref(); layout(); await applySize(); break;
-    case "openChar": showPicker(false); go(`${DDB}/characters/${ds.id}`); break;
+    case "openChar": showPicker(false); closeSheet(); go(`${DDB}/characters/${ds.id}`); break;
     case "tab": window.open(current, "_blank"); break;
-    case "gm": $("campaign").value = config().campaignUrl; $("relayCode").value = config().relayCode || ""; $("gm").hidden = !$("gm").hidden; break;
+    case "gm": $("campaign").value = config().campaignUrl; $("relayCode").value = config().relayCode || ""; $("mHidden").checked = !!config().monsterHidden; $("gm").hidden = !$("gm").hidden; break;
     case "gmClose": $("gm").hidden = true; break;
     case "gmSave": {
       const raw = $("relayCode").value.trim(), code = cleanRelayCode(raw);
       if (raw && !code) { hint("That relay code doesn't look right. Copy it again from the Beyond Relay window (words/letters, e.g. brave-otter-lamp/Ab12Cd34)."); break; }
-      await saveConfig((cfg) => { cfg.campaignUrl = parseCampaign($("campaign").value); cfg.relayCode = code; });
+      await saveConfig((cfg) => { cfg.campaignUrl = parseCampaign($("campaign").value); cfg.relayCode = code; cfg.monsterHidden = $("mHidden").checked; });
       $("gm").hidden = true; hint(""); break;
     }
     case "drawer": PREF.drawer = PREF.drawer === ds.v ? "" : ds.v; savePref(); renderDrawer(); break;
@@ -330,7 +464,28 @@ async function onAction(act, el) {
     case "bPrev": { const b = await updateBattle((b) => advanceTurn(b, -1)); await announceTurn(b); break; }
     case "bSetTurn": { const b = await updateBattle((b) => { b.turn = +ds.i; }); await announceTurn(b); break; }
     case "bSort": await updateBattle(sortEntries); break;
-    case "bReroll": await updateBattle((b) => { for (const e of b.entries) if (e.kind === "npc") e.init = d20() + (e.bonus || 0); sortEntries(b); }); break;
+    case "bReroll": await updateBattle((b) => { for (const e of b.entries) if (e.kind === "npc") e.init = rollD20() + (e.bonus || 0); sortEntries(b); }); break;
+    case "mPick": {
+      const it = UI.search.items[+ds.i]; if (!it) break;
+      UI.add = it.locked ? { ...UI.add, name: it.name } : { name: it.name, hp: String(it.hp ?? ""), ac: String(it.ac ?? ""), bonus: String(it.init ?? ""), count: UI.add.count };
+      UI.pick = { id: it.locked ? null : it.id, name: it.name };
+      UI.search = { q: "", items: [], busy: false, err: "" };
+      renderDrawer(); break;
+    }
+    case "mOpen": await openSheet(ds.id); break;
+    case "mClose": closeSheet(); break;
+    case "mPage": { const e = UI.sheet && battle().entries.find((x) => x.id === UI.sheet.entryId); const m = e && MON[e.monsterId]; if (m && m.url) window.open(m.url, "_blank"); break; }
+    case "mRoll": {
+      const e = UI.sheet && battle().entries.find((x) => x.id === UI.sheet.entryId); if (!e) break;
+      const hidden = !!config().monsterHidden;
+      try {
+        const r = await relayCall("monster-roll", { monsterId: e.monsterId, name: e.name, action: ds.action, rollType: ds.type, dice: ds.dice, hidden });
+        const x = (r.roll.rolls || [])[0] || {};
+        UI.last = `${e.name}: ${ds.action} ${ds.type === "roll" ? "" : ds.type} → ${x.total} (${x.text})${hidden ? " · hidden" : ""}`.replace(/\s+/g, " ");
+        renderSheet();
+      } catch (err) { toast(`Roll not sent: ${err.message}`, 6000); }
+      break;
+    }
     case "bRemove": await updateBattle((b) => { const i = b.entries.findIndex((e) => e.id === ds.id); if (i >= 0) { b.entries.splice(i, 1); if (i < b.turn) b.turn--; } }); break;
     case "pHeal": await sendHp(ds.id, amountFor(ds.id), null, "Heal button"); break;
     case "pDmg": await sendHp(ds.id, -amountFor(ds.id), null, "Dmg button"); break;
@@ -351,13 +506,14 @@ async function onAction(act, el) {
       const bonus = parseInt($("bBonus").value, 10) || 0;
       const acIn = parseInt($("bAc").value, 10); const ac = isNaN(acIn) ? null : acIn;
       const count = Math.max(1, Math.min(30, parseInt($("bCount").value, 10) || 1));
+      const monsterId = UI.pick && UI.pick.id && UI.pick.name === name ? UI.pick.id : null;
       if (document.activeElement) document.activeElement.blur();
-      $("bName").value = ""; $("bHpN").value = ""; $("bCount").value = "";
+      UI.add = { name: "", hp: "", ac: "", bonus: "", count: "" }; UI.pick = null; UI.search = { q: "", items: [], busy: false, err: "" };
       await updateBattle((b) => {
         const taken = b.entries.filter((e) => e.kind === "npc" && (e.name === name || e.name.startsWith(name + " "))).length;
         for (let i = 0; i < count; i++) {
           const n = count > 1 || taken ? `${name} ${taken + i + 1}` : name;
-          b.entries.push({ id: uid(), kind: "npc", name: n, hp, maxHp: hp, ac, bonus, init: d20() + bonus });
+          b.entries.push({ id: uid(), kind: "npc", name: n, hp, maxHp: hp, ac, bonus, init: rollD20() + bonus, ...(monsterId ? { monsterId } : {}) });
         }
         sortEntries(b);
       });
@@ -423,7 +579,16 @@ async function start() {
   });
   document.body.addEventListener("change", (ev) => { const el = ev.target; if (el.dataset && el.dataset.field) { el.__pending = false; onField(el.dataset.field, el).catch((e) => hint(e.message)); } });
   document.body.addEventListener("focusout", (ev) => { const t = ev.target; if (t && t.__pending && t.dataset && t.dataset.field) { t.__pending = false; onField(t.dataset.field, t).catch(() => {}); } });
+  const ADD_FIELDS = { bName: "name", bHpN: "hp", bAc: "ac", bBonus: "bonus", bCount: "count" };
+  document.body.addEventListener("input", (ev) => {
+    const f = ADD_FIELDS[ev.target.id]; if (!f) return;
+    UI.add[f] = ev.target.value;
+    if (f === "name") onSearchInput();
+  });
+  // Hidden rolls are written by the background page into this browser's storage.
+  window.addEventListener("storage", (ev) => { if (ev.key === HIDDEN_LOG) renderDrawer(); });
   document.body.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && ev.target.id === "bName" && UI.search.q) { UI.search = { q: "", items: [], busy: false, err: "" }; renderDrawer(); return; }
     if (ev.key !== "Enter") return;
     if (["bName", "bHpN", "bAc", "bBonus", "bCount"].includes(ev.target.id)) { ev.preventDefault(); onAction("bAdd", ev.target).catch((e) => hint(e.message)); }
     else if (ev.target.dataset && ev.target.dataset.field) { ev.preventDefault(); ev.target.blur(); }

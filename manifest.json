@@ -1,15 +1,15 @@
 {
   "name": "Beyond in Owlbear",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "manifest_version": 1,
   "description": "Open your party's D&D Beyond character sheets inside Owlbear Rodeo.",
   "author": "Pavi",
   "homepage_url": "https://github.com/Pavidiran/beyond-in-owlbear",
   "background_url": "https://pavidiran.github.io/beyond-in-owlbear/bg.html",
-  "icon": "https://pavidiran.github.io/beyond-in-owlbear/icon.svg?v=0.7.1",
+  "icon": "https://pavidiran.github.io/beyond-in-owlbear/icon.svg?v=0.8.0",
   "action": {
     "title": "D&D Beyond sheets",
-    "icon": "https://pavidiran.github.io/beyond-in-owlbear/icon.svg?v=0.7.1",
+    "icon": "https://pavidiran.github.io/beyond-in-owlbear/icon.svg?v=0.8.0",
     "popover": "https://pavidiran.github.io/beyond-in-owlbear/index.html",
     "width": 440,
     "height": 900
