@@ -1,21 +1,25 @@
-// Beyond in Owlbear — the real D&D Beyond page in the Owlbear side panel, plus a small drawer with
-// the shared roll log and battle tracker. D&D Beyond handles the sheets; the rolls arrive through
-// Beyond Relay on the DM's computer (see bg.js), initiative rolls fill the battle tracker.
+// Beyond in Owlbear — the real D&D Beyond character sheet in the Owlbear side panel, plus a small drawer
+// with the shared roll log, party and battle tracker. D&D Beyond handles the sheets. They are served by
+// Beyond Relay on the DM's computer, which fetches them with the DM's login: nobody signs in (browsers
+// like Chrome and Edge never pass a D&D Beyond login to a page embedded in Owlbear). Rolls arrive through
+// the relay too (see bg.js); initiative rolls fill the battle tracker.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
-import { NS, KEYS, HIDDEN_LOG, LOG_MAX, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode, relayUrl } from "./shared.js?v=0.8.0";
+import { NS, KEYS, HIDDEN_LOG, LOG_MAX, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode, relayUrl, relaySheetUrl } from "./shared.js?v=0.9.0";
 
-const VERSION = "0.8.0";
-const RELAY_MIN = "0.10.0"; // monster search, sheets and rolls need this Beyond Relay version
+const VERSION = "0.9.0";
+const RELAY_MIN = "0.10.0"; // monster search, stat blocks and monster rolls need this Beyond Relay version
 const SIZES = { compact: [440, 620], tall: [440, 900], wide: [620, 900] };
 const DDB = "https://www.dndbeyond.com";
-const HOME = `${DDB}/characters`; // "My characters": each player picks their own sheet there
 const LOCAL = !OBR.isAvailable;   // opened outside Owlbear: local test mode with a fake room
+const RELAY_TEST = LOCAL ? new URLSearchParams(location.search).get("relay") || "" : ""; // local test: ?relay=ws://localhost:8799/?k=test
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 let ME = { id: "", name: "", role: "PLAYER" }, META = {};
-let PREF = { zoom: 0.8, size: "tall", last: "", drawer: "" };
+let PREF = { zoom: 0.8, size: "tall", char: "", drawer: "" }; // char = id of the character this player opened
 try { Object.assign(PREF, JSON.parse(localStorage.getItem("bio-pref") || "{}")); } catch {}
+if (!PREF.char && PREF.last) PREF.char = (String(PREF.last).match(/\/characters\/(\d+)/) || [])[1] || ""; // from before 0.9
+delete PREF.last;
 const savePref = () => { try { localStorage.setItem("bio-pref", JSON.stringify(PREF)); } catch {} };
 const UI = {
   confirmClear: 0,
@@ -92,16 +96,35 @@ async function relayCall(type, data, ms = 20000) {
 }
 
 // ------------------------------------------------------------------ sheet frame
-// The frame is cross-origin, so the browser never tells us its address: we only know the page we
-// opened ourselves.
-let current = "";
-// The sheet the panel opened (from the picker). After a DM edit it is reloaded even if the player
-// clicked elsewhere inside D&D Beyond meanwhile: that brings them back to their sheet with fresh values.
-const sheetId = () => (current.match(/\/characters\/(\d+)/) || [])[1] || "";
-function go(url) {
-  current = url; PREF.last = url; savePref();
-  $("frame").src = url;
-  hint(""); cookieWarned = false; cookieCheck(); // keep the cookie warning if it still applies
+// The frame shows the picked character's sheet, served by Beyond Relay. It is cross-origin, so the
+// browser never tells us what happens inside: we only know the address we opened ourselves.
+let shown = "", wasLive = false;
+const relayLive = () => !!RELAY_TEST || relayState().cls === "live";
+function sheetUrl(id) {
+  if (RELAY_TEST) { try { const u = new URL(RELAY_TEST); return `http://${u.host}/characters/${id}?k=${u.searchParams.get("k")}`; } catch { return ""; } }
+  return relaySheetUrl(config().relayCode, id);
+}
+// Called on every room change: loads the sheet when the relay (re)appears or its code changes, and
+// covers the frame with a note while the relay is off. force = load again even if nothing changed.
+function showSheet(force = false) {
+  const live = relayLive(), ps = party(), id = PREF.char;
+  const known = !!id && (!ps.length || ps.some((p) => p.entityId === id));
+  const url = live && known ? sheetUrl(id) : "";
+  const off = $("off");
+  if (url) {
+    off.hidden = true;
+    if (force || url !== shown || !wasLive) { shown = url; $("frame").src = url; }
+  } else {
+    const dm = ME.role === "GM";
+    const html = !live
+      ? `<b>No character sheets right now</b><div>${dm ? esc(relayState().text) + ". Start Beyond Relay and paste its code in the settings (⚙)." : "They appear while the DM's Beyond Relay is running."}</div>` +
+        `<button data-act="tab">Open D&amp;D Beyond in a browser tab</button>`
+      : `<b>Pick a character</b><div>${ps.length ? "Press ↻ and choose your character." : "Waiting for the campaign's character list from Beyond Relay..."}</div>`;
+    if (off.__html !== html) { off.__html = html; off.innerHTML = html; }
+    off.hidden = false;
+    if (live && ps.length && $("picker").hidden) showPicker(true); // nothing picked yet (or that character left the campaign)
+  }
+  wasLive = live;
 }
 function hint(t) { $("hint").textContent = t; $("hint").hidden = !t; }
 
@@ -123,48 +146,6 @@ async function applySize() {
 function renderBar() {
   $("campaignBtn").hidden = !config().campaignUrl;
   $("gmBtn").hidden = ME.role !== "GM";
-}
-
-function signIn() {
-  // dndbeyond.com/sign-in refuses to load inside a frame, so the login happens in a pop-up window.
-  const ret = current.startsWith(DDB) ? current.slice(DDB.length) : "/characters";
-  const w = window.open(`${DDB}/sign-in?returnUrl=` + encodeURIComponent(ret), "ddb-signin", "width=560,height=760");
-  if (!w) { hint("Pop-ups are blocked. Allow them for this site, or sign in via ↗ and come back."); return; }
-  hint("Sign in in the pop-up, then come back here. The panel reloads by itself (or press ↻).");
-  let done = false, away = false;
-  const finish = () => {
-    if (done) return; done = true; clearInterval(t);
-    window.removeEventListener("focus", onBack); document.removeEventListener("visibilitychange", onVis);
-    for (const ev of ["pointerdown", "mousemove", "keydown"]) document.removeEventListener(ev, onBack, true);
-    go(current);
-  };
-  const onBack = () => setTimeout(finish, 300);
-  const onVis = () => { if (document.visibilityState === "visible") onBack(); };
-  const t = setInterval(() => {
-    if (w.closed) return finish();
-    if (!document.hasFocus()) away = true; else if (away) finish();
-  }, 700);
-  setTimeout(() => {
-    window.addEventListener("focus", onBack); document.addEventListener("visibilitychange", onVis);
-    for (const ev of ["pointerdown", "mousemove", "keydown"]) document.addEventListener(ev, onBack, true);
-  }, 1500);
-}
-
-// Firefox and Safari give a framed site its own empty cookie jar, so the framed sheet stays logged
-// out until the player allows cross-site cookies for Owlbear once. hasStorageAccess() tells us
-// whether that is currently the case, so the warning shows only while it is needed.
-let cookieWarned = false;
-async function cookieCheck() {
-  let ok = true;
-  try { if (window.top !== window && document.hasStorageAccess) ok = await document.hasStorageAccess(); } catch {}
-  if (ok) { if (cookieWarned) { cookieWarned = false; hint(""); } return; }
-  const ua = navigator.userAgent;
-  const msg = /Firefox\//.test(ua)
-    ? "Firefox blocks cross-site cookies here, so the sheet stays logged out. One-time fix: click the shield icon left of the address bar and turn off Enhanced Tracking Protection for owlbear.rodeo."
-    : /Safari\//.test(ua) && !/Chrome\//.test(ua)
-      ? "Safari blocks cross-site cookies here, so the sheet stays logged out. One-time fix: Settings → Privacy → turn off \"Prevent cross-site tracking\"."
-      : "This browser blocks third-party cookies here, so the sheet stays logged out. Allow them for owlbear.rodeo (Chrome: the eye icon at the right of the address bar), then reload.";
-  cookieWarned = true; hint(msg);
 }
 
 // ------------------------------------------------------------------ room writes (always re-read first)
@@ -427,29 +408,28 @@ function renderDrawer() {
 function renderPicker() {
   const el = $("picker"); if (el.hidden) return;
   const ps = party();
-  const camp = config().campaignUrl;
-  el.innerHTML = `<div class="ptitle">Open a character sheet</div>` +
-    (ps.length ? ps.map((p) => `<button class="pick" data-act="openChar" data-id="${esc(p.entityId)}"><span>${esc(p.name)}</span>${hpBadge(p)}</button>`).join("")
+  const html = `<div class="ptitle">Open a character sheet</div>` +
+    (ps.length ? ps.map((p) => `<button class="pick${p.entityId === PREF.char ? " on" : ""}" data-act="openChar" data-id="${esc(p.entityId)}"><span>${esc(p.name)}</span>${hpBadge(p)}</button>`).join("")
       : `<div class="muted">The campaign's characters appear here while the DM's Beyond Relay is running.</div>`) +
-    `<div class="pother"><button class="ghost" data-act="ddbHome">My characters on D&amp;D Beyond</button>${camp ? `<button class="ghost" data-act="campaign">Campaign page</button>` : ""}</div>` +
-    `<div class="muted">Sheets opened from this list reload by themselves when the DM changes their HP.</div>`;
+    `<div class="muted">The sheets are the real D&amp;D Beyond sheets, fetched by the DM's Beyond Relay: nobody needs to sign in. Your sheet reloads by itself when the DM changes your HP.</div>` +
+    (PREF.char && ps.some((p) => p.entityId === PREF.char) ? `<div class="pother"><button class="ghost" data-act="pickerClose">Back to the sheet</button></div>` : "");
+  if (el.__html !== html) { el.__html = html; el.innerHTML = html; } // unchanged: leave the buttons alone
 }
 function showPicker(on) { $("picker").hidden = !on; renderPicker(); }
-function renderAll() { renderBar(); renderDrawer(); renderPicker(); renderSheet(); }
+function renderAll() { renderBar(); renderDrawer(); renderPicker(); renderSheet(); showSheet(); }
 
 // ------------------------------------------------------------------ actions
 async function onAction(act, el) {
   const ds = el.dataset;
   switch (act) {
-    case "home": if (party().length) showPicker(true); else go(HOME); break;
-    case "ddbHome": showPicker(false); go(HOME); break;
-    case "campaign": if (config().campaignUrl) { showPicker(false); go(config().campaignUrl); } break;
-    case "login": signIn(); break;
+    case "home": if (party().length) showPicker(true); else toast("The character list appears while the DM's Beyond Relay is running"); break;
+    case "pickerClose": showPicker(false); break;
+    case "campaign": if (config().campaignUrl) window.open(config().campaignUrl, "_blank"); break;
     case "zoomOut": PREF.zoom = Math.max(0.5, +(PREF.zoom - 0.05).toFixed(2)); savePref(); layout(); break;
     case "zoomIn": PREF.zoom = Math.min(1.2, +(PREF.zoom + 0.05).toFixed(2)); savePref(); layout(); break;
     case "size": PREF.size = PREF.size === "compact" ? "tall" : PREF.size === "tall" ? "wide" : "compact"; savePref(); layout(); await applySize(); break;
-    case "openChar": showPicker(false); closeSheet(); go(`${DDB}/characters/${ds.id}`); break;
-    case "tab": window.open(current, "_blank"); break;
+    case "openChar": PREF.char = String(ds.id); savePref(); showPicker(false); closeSheet(); showSheet(true); break;
+    case "tab": window.open(PREF.char ? `${DDB}/characters/${PREF.char}` : `${DDB}/characters`, "_blank"); break;
     case "gm": $("campaign").value = config().campaignUrl; $("relayCode").value = config().relayCode || ""; $("mHidden").checked = !!config().monsterHidden; $("gm").hidden = !$("gm").hidden; break;
     case "gmClose": $("gm").hidden = true; break;
     case "gmSave": {
@@ -557,16 +537,12 @@ async function start() {
   // After a DM edit, a sheet showing that character reloads (D&D Beyond doesn't notice outside changes).
   let refreshT = null;
   if (!LOCAL) OBR.broadcast.onMessage(`${NS}/hp-edited`, (ev) => {
-    if (ev.data && sheetId() && String(ev.data.entityId) === sheetId()) {
-      clearTimeout(refreshT); refreshT = setTimeout(() => go(current), 1500); // one reload after a burst of clicks
+    if (ev.data && PREF.char && String(ev.data.entityId) === PREF.char) {
+      clearTimeout(refreshT); refreshT = setTimeout(() => showSheet(true), 1500); // one reload after a burst of clicks
     }
   });
   renderAll(); layout(); await applySize();
-  if (/\/characters\/\d+/.test(PREF.last || "")) go(PREF.last);
-  else { go(HOME); if (party().length) showPicker(true); }
-  await cookieCheck();
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") cookieCheck(); });
-  setInterval(renderDrawer, 60000); // relay staleness indicator
+  setInterval(() => { renderDrawer(); showSheet(); }, 60000); // relay staleness
   document.addEventListener("pointerdown", () => { pressing = true; }, true);
   const release = () => { if (!pressing) return; pressing = false; if (renderWaiting) setTimeout(renderDrawer, 60); }; // after the click is delivered
   document.addEventListener("pointerup", release, true);

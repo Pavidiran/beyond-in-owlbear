@@ -93,6 +93,11 @@ input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-o
 .picker .ptitle { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
 .picker button.pick { display: flex; align-items: center; gap: 8px; justify-content: space-between; padding: 8px 10px; text-align: left; font-size: 13px; }
 .picker .pother { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.picker button.pick.on { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+/* note over the frame while there is no sheet to show (relay off, nothing picked) */
+.off { position: absolute; inset: 0; z-index: 4; background: var(--bg); color: var(--fg); padding: 24px 16px; display: grid; align-content: start; justify-items: start; gap: 8px; font-size: 13px; }
+.off b { font-size: 15px; }
+.off div { color: var(--fg2); }
 
 /* Party tab */
 .pcard { padding: 5px 8px; border-bottom: 1px solid var(--line); }

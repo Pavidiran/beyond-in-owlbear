@@ -281,3 +281,29 @@ in the frame; would reappear every session because the tunnel address changes).
 OPEN DECISIONS (user): everyone acts with the DM's account (who may open/edit what; relay must restrict
 to the campaign's sheets), dice settings are the DM's for everybody, account/ToS risk, whether Firefox
 keeps the direct sheet, what the panel shows when the relay is off.
+
+## Relay-served sheets built: extension 0.9.0, relay 0.11.0 (2026-11-13)
+Decisions (user): everyone uses the sheets with the DM's login (friends only, editing each other's sheets
+is accepted); ALL self-login removed (Sign in button, cookie warnings, "My characters"); cookie banner
+removed; ↻ = the panel's own list of the campaign's characters (D&D Beyond's campaign page was checked:
+unstyled through the relay and it is the DM view with Edit Campaign / invite / remove controls);
+relay off = note in the panel + ↗ to D&D Beyond in a normal tab; Campaign button opens a browser tab.
+- Relay: aiohttp server on the tunnel port serves BOTH the panel websocket (/?k=secret, unchanged) and
+  the sheets. Sheet page keeps D&D Beyond's own path: /characters/<id>?k=<secret> (the sheet program reads
+  the path; a /s/<secret>/ prefix on the page gave an empty sheet). Everything the page then loads uses
+  /s/<secret>/... : /s/<secret>/__p/<host>/<path> = a D&D Beyond service, /s/<secret>/<path> = www file.
+  Public static paths (/app, /content, /dice, /avatars, media/images hosts) need no secret and get no login.
+- Allow-list: page only for campaign characters; auth-service /v1/cobalt-token; character-service
+  /character/* with every characterId (path, query, JSON body; 0 = none) in the campaign; gamedata,
+  dice-service; api /campaigns/...<campaignId>; game-log-rest getmessages for the campaign; api /bi/*
+  answered 204 locally. Refusals are logged once each in the relay log.
+- Known gap (told the user, accepted): the DM's short-lived cobalt token reaches the players' browsers.
+- Panel: PREF.char = picked character id; frame = relaySheetUrl(code, id); reloads on relay code change,
+  relay coming back, and DM HP edits; "off" note over the frame while the relay is not live.
+- VERIFIED locally: sheet, spells/inventory tabs, sidebar, roll with 3D dice (arrives in the relay's roll
+  feed), HP change (relay sees it in 1 s), refusals (wrong code, foreign character, account page), embedded
+  cross-site in real Chrome 157 and Edge 157 (no cookies, no banner), built exe serves.
+- NOT verified yet: through the Cloudflare tunnel in a real Owlbear room, Firefox/Safari, several players
+  at once, sessions longer than a few minutes, level-up/builder pages.
+- Noted: D&D Beyond's own header (with its Sign in link) is still part of the page; its links lead to
+  the relay's "not available" note.

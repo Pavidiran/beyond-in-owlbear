@@ -11,25 +11,32 @@ https://pavidiran.github.io/beyond-in-owlbear/manifest.json
 
 ## How it works
 
-- The panel shows the real D&D Beyond page, in D&D Beyond's own mobile layout, scaled down. Nothing is translated or re-implemented.
-- Toolbar: ↻ character list (the campaign's characters, read through the relay; picking one opens its
-  sheet, and that sheet reloads itself after DM HP edits; without the relay: My characters), Campaign (if the DM set a campaign link), Sign in (pop-up), zoom,
-  panel size (compact / tall / wide), open in a browser tab, DM room settings.
-- Players open their own sheet from D&D Beyond's "My characters" page after signing in. The DM can
-  add the campaign link once per room so everyone gets a Campaign button.
+- The panel shows the real D&D Beyond character sheet, in D&D Beyond's own mobile layout, scaled down.
+  Nothing is translated or re-implemented.
+- **Nobody signs in.** The sheets are served by **Beyond Relay**, a small program the DM runs during the
+  session (see below). It fetches each sheet from D&D Beyond with the DM's login and passes it on to the
+  panel. This works the same in every browser, and players install nothing.
+- Toolbar: ↻ character list (the campaign's characters; picking one opens its sheet, and the panel
+  remembers it), Campaign (if the DM set a campaign link; opens in a browser tab), zoom, panel size
+  (compact / tall / wide), ↗ open the character on dndbeyond.com in a browser tab, DM room settings.
+- A sheet reloads by itself when the DM changes that character's HP.
 
 ## Limits
 
-- Sign in only through the panel's **Sign in** button: D&D Beyond refuses to show its login page inside
-  a frame, so the login opens in a pop-up and the panel reloads when you come back.
-- **Firefox and Safari** give a framed site its own empty cookie jar, and their automatic exception
-  only applies when the framed site itself opens the pop-up, which D&D Beyond never does. Those
-  players do a one-time step: Firefox → shield icon left of the address bar → turn off Enhanced
-  Tracking Protection for owlbear.rodeo; Safari → Privacy → turn off "Prevent cross-site tracking".
-  Chrome and Edge need nothing. The panel checks the browser's cross-site cookie access and shows the
-  instruction only while it is actually blocked. (Verified 2026-11-08; `test/depth.html` reproduces it.)
-- Rolls made with D&D Beyond's own dice stay in that player's sheet. Use a dice extension such as
-  Dice+ for rolls the whole table should see.
+- **Everyone uses the sheets with the DM's rights.** D&D Beyond lets the DM edit the campaign's
+  characters, so every player in the room can open and edit every character of the campaign. Meant for a
+  table of friends. The relay only serves this campaign's character sheets and the services a sheet
+  needs, but that is not a hard wall: the sheet needs a short-lived access key of the DM's login, and
+  that key reaches the players' browsers.
+- Dice settings (dice set, who sees the 3D dice) are the DM's, for everybody.
+- Without a running relay there are no sheets in the panel; ↗ opens D&D Beyond in a normal browser tab.
+- Why not each player's own login: Chrome, Edge and every other Chromium browser never send D&D
+  Beyond's login cookie to a page embedded in another site (the cookie has no SameSite attribute, so it
+  counts as "Lax"; reproduced 2026-11-13 in Chrome 157 and Edge 157). No browser setting changes that.
+- The relay changes three things in D&D Beyond's sheet page: the service addresses in its settings point
+  to the relay, a small script reroutes the sheet's remaining requests (the 3D dice files are only handed
+  out to D&D Beyond's own site), and the cookie-banner loader is removed. It can break when D&D Beyond
+  changes its site.
 
 ## Logo
 
@@ -41,9 +48,10 @@ The calligraphic B is from the font Great Vibes (SIL Open Font License 1.1, `bra
 Run `serve.ps1` and open http://localhost:8787/sheet.html?ddb=CHARACTER_ID to test the viewer
 outside Owlbear.
 
-## Roll relay (DM only)
+## Beyond Relay (DM only)
 
-Players roll in their D&D Beyond sheet as usual. To show those rolls in Owlbear (roll log, pop-ups,
+The relay serves the character sheets (see above). Players roll in their sheet as usual; the relay also
+shows those rolls in Owlbear (roll log, pop-ups,
 initiative straight into the battle tracker) and the party's hit points (updated as soon as D&D Beyond
 announces a change, plus one small batch read every 5 seconds; shown in the Battle tab), the DM runs **Beyond Relay** during the session. The DM can
 also change a player's HP in the Battle tab's party list (− [amount] +, empty box = 1, Temp sets
@@ -57,7 +65,8 @@ Players install nothing.
    (email, Google, Apple, ...). The login is kept for next time.
 3. The relay shows a **relay code** and copies it to the clipboard. In Owlbear open the
    Beyond in Owlbear panel, click the gear icon, paste it under *Relay code*, save. The green dot in
-   the panel means rolls are live. The code changes every time the relay starts.
+   the panel means the relay is live: sheets, rolls and hit points all come through it. The code changes
+   every time the relay starts; when a new code is saved, every player's panel switches to it by itself.
 
 How it reaches Owlbear: browsers no longer let a web page connect to a program on your own
 computer, so the relay opens a free Cloudflare "quick tunnel" (no account, no domain) that gives it a

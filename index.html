@@ -5,33 +5,32 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Beyond in Owlbear</title>
   <link rel="icon" href="icon.svg">
-  <link rel="stylesheet" href="style.css?v=0.8.0">
+  <link rel="stylesheet" href="style.css?v=0.9.0">
 </head>
 <body>
   <div class="bar" id="bar">
-    <button class="ic" data-act="home" title="Reload: pick a character sheet">↻</button>
-    <button class="ic" data-act="campaign" id="campaignBtn" title="Campaign page" hidden>Campaign</button>
+    <button class="ic" data-act="home" title="Character list: pick or reload a sheet">↻</button>
+    <button class="ic" data-act="campaign" id="campaignBtn" title="Campaign page on D&D Beyond (opens in a browser tab)" hidden>Campaign</button>
     <span class="spacer"></span>
-    <button class="ic" data-act="login" title="Sign in to D&D Beyond (pop-up), then the page reloads">Sign in</button>
     <button class="ic" data-act="zoomOut" title="Smaller">−</button>
     <span class="z" id="zoomLbl">80%</span>
     <button class="ic" data-act="zoomIn" title="Larger">+</button>
     <button class="ic" data-act="size" id="sizeBtn" title="Panel size: compact / tall / wide">⤢</button>
-    <button class="ic" data-act="tab" title="Open in a browser tab">↗</button>
+    <button class="ic" data-act="tab" title="Open this character on dndbeyond.com in a browser tab (your own login)">↗</button>
     <button class="ic" data-act="gm" id="gmBtn" title="Room settings (DM)" hidden>⚙</button>
   </div>
   <div class="hint" id="hint" hidden></div>
   <div class="gm" id="gm" hidden>
-    <label>Campaign link <small>(adds a Campaign button for everyone; the roll relay must be set to the same campaign)</small>
+    <label>Campaign link <small>(adds a Campaign button for everyone; Beyond Relay must be set to the same campaign)</small>
       <input type="text" id="campaign" placeholder="https://www.dndbeyond.com/campaigns/1234567"></label>
-    <label>Relay code <small>(from the Beyond Relay window; changes every time the relay starts)</small>
+    <label>Relay code <small>(from the Beyond Relay window; changes every time the relay starts. Sheets, rolls and hit points all come through it)</small>
       <input type="text" id="relayCode" placeholder="some-random-words/Ab12Cd34Ef56"></label>
     <label class="chk"><input type="checkbox" id="mHidden"> Monster rolls hidden from players <small>(off: everyone sees them, like player rolls)</small></label>
     <div class="row"><button data-act="gmSave">Save for this room</button><button class="ghost" data-act="gmClose">Close</button></div>
   </div>
   <div id="drawer"></div>
-  <div class="wrap" id="wrap"><div id="picker" class="picker" hidden></div><div id="msheet" class="msheet" hidden></div><iframe id="frame" allow="clipboard-write" referrerpolicy="no-referrer-when-downgrade"></iframe></div>
+  <div class="wrap" id="wrap"><div id="picker" class="picker" hidden></div><div id="msheet" class="msheet" hidden></div><div id="off" class="off" hidden></div><iframe id="frame" allow="clipboard-write" referrerpolicy="no-referrer-when-downgrade"></iframe></div>
   <div id="toast" class="toast" hidden></div>
-  <script type="module" src="app.js?v=0.8.0"></script>
+  <script type="module" src="app.js?v=0.9.0"></script>
 </body>
 </html>

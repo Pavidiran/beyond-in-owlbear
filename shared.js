@@ -18,6 +18,12 @@ export function cleanRelayCode(code) {
   const m = u.match(/^wss:\/\/([a-z0-9-]+)\.trycloudflare\.com\/\?k=(.+)$/);
   return `${m[1]}/${m[2]}`;
 }
+// Address of a character sheet served by Beyond Relay (it fetches the real D&D Beyond sheet with the DM's
+// login, so nobody signs in). The page keeps D&D Beyond's own path; the secret travels as ?k=.
+export function relaySheetUrl(code, id) {
+  const m = relayUrl(code).match(/^wss:\/\/([a-z0-9-]+\.trycloudflare\.com)\/\?k=(.+)$/);
+  return m && /^\d+$/.test(String(id)) ? `https://${m[1]}/characters/${id}?k=${m[2]}` : "";
+}
 export const LOG_MAX = 25;
 // Hidden rolls (sent to the DM only) never go into the room: the DM's background page keeps them in
 // this browser's storage, which the panel (same site) reads.

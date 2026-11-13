@@ -29,9 +29,11 @@ from datetime import datetime
 from pathlib import Path
 
 try:
+    import aiohttp
     import websockets
+    from aiohttp import web
 except ImportError:  # pragma: no cover
-    print("Missing dependency: run  pip install websockets pywebview")
+    print("Missing dependency: run  pip install aiohttp websockets pywebview")
     sys.exit(1)
 
 for _s in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code page
@@ -40,7 +42,7 @@ for _s in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code
     except Exception:
         pass
 
-VERSION = "0.10.0"
+VERSION = "0.11.0"
 DDB = "https://www.dndbeyond.com"
 AUTH_URL = "https://auth-service.dndbeyond.com/v1/cobalt-token"
 WS_URL = "wss://game-log-api-live.dndbeyond.com/v1"
@@ -845,36 +847,35 @@ def describe(roll):
     return f"{roll['who']} - {roll['action'] or 'roll'}: " + "; ".join(parts)
 
 
-# ---------------------------------------------------------------- local server (Owlbear panel side)
+# ---------------------------------------------------------------- local server (Owlbear side): panel connection
 async def send_all(obj):
     if not CLIENTS:
         return
     msg = json.dumps(obj)
     for ws in list(CLIENTS):
         try:
-            await ws.send(msg)
+            await ws.send_str(msg)
         except Exception:
             CLIENTS.discard(ws)
 
 
-async def client_handler(ws):
+async def panel_socket(request):
     # Reachable from the internet through the tunnel, so only clients that know this run's secret get in.
-    from urllib.parse import urlparse, parse_qs
-    try:
-        k = (parse_qs(urlparse(ws.request.path).query).get("k") or [""])[0]
-    except Exception:
-        k = ""
-    if not secrets.compare_digest(k, TOKEN):
-        await ws.close(code=4001, reason="wrong relay code")
-        return
+    ws = web.WebSocketResponse(heartbeat=25, max_msg_size=1_000_000)
+    await ws.prepare(request)
+    if not secrets.compare_digest(request.query.get("k", ""), TOKEN):
+        await ws.close(code=4001, message=b"wrong relay code")
+        return ws
     CLIENTS.add(ws)
     log(f"Owlbear connected ({len(CLIENTS)} tab{'s' if len(CLIENTS) != 1 else ''})")
     try:
-        await ws.send(json.dumps({"type": "hello", "version": VERSION, "campaignId": STATE["campaignId"],
-                                  "connected": STATE["connected"], "recent": list(RECENT), "party": PARTY["chars"]}))
-        async for raw in ws:
+        await ws.send_str(json.dumps({"type": "hello", "version": VERSION, "campaignId": STATE["campaignId"],
+                                      "connected": STATE["connected"], "recent": list(RECENT), "party": PARTY["chars"]}))
+        async for frame in ws:
+            if frame.type != aiohttp.WSMsgType.TEXT:
+                continue
             try:
-                msg = json.loads(raw)
+                msg = json.loads(frame.data)
             except Exception:
                 continue
             if not isinstance(msg, dict):
@@ -883,7 +884,7 @@ async def client_handler(ws):
             if t == "hp":
                 log(f"HP request from Owlbear: {json.dumps({k: msg.get(k) for k in ('entityId', 'delta', 'temp', 'src', 'reqId')})}")
                 result = await change_hp(str(msg.get("entityId") or ""), msg.get("delta"), msg.get("temp"))
-                await ws.send(json.dumps({"type": "hp-result", "reqId": msg.get("reqId"), **result}))
+                await ws.send_str(json.dumps({"type": "hp-result", "reqId": msg.get("reqId"), **result}))
             elif t in ("monster-search", "monster-get", "monster-roll"):
                 try:
                     if t == "monster-search":
@@ -897,12 +898,187 @@ async def client_handler(ws):
                 except Exception as e:
                     log(f"{t} failed: {e!r}")
                     result = {"ok": False, "error": str(e)}
-                await ws.send(json.dumps({"type": "reply", "reqId": msg.get("reqId"), **result}))
+                await ws.send_str(json.dumps({"type": "reply", "reqId": msg.get("reqId"), **result}))
     except Exception:
         pass
     finally:
         CLIENTS.discard(ws)
         log(f"Owlbear disconnected ({len(CLIENTS)} tab{'s' if len(CLIENTS) != 1 else ''})")
+    return ws
+
+
+# ---------------------------------------------------------------- character sheets served through the relay
+# Chrome, Edge and the other Chromium browsers never send D&D Beyond's login cookie to a page that is
+# embedded in another site (it has no SameSite attribute, so it counts as "Lax"): inside Owlbear a
+# player can't be signed in there. So nobody signs in at all: the panel frames THIS program, which
+# fetches the real sheet with the DM's login and passes it on. Everyone therefore uses the sheets with
+# the DM's rights (D&D Beyond lets the DM edit the campaign's characters). Tested 2026-11-13, see PLAN.md.
+#   https://<tunnel>/characters/<id>?k=<secret>     the sheet page (only characters of this campaign)
+#   https://<tunnel>/s/<secret>/__p/<host>/<path>   a D&D Beyond service the sheet calls (allow-list below)
+# What is changed in D&D Beyond's page: the service addresses in its settings point to the relay, a
+# small script reroutes the requests the sheet still sends to dndbeyond.com (the 3D dice files are only
+# handed out to D&D Beyond's own site), and the cookie-banner loader is removed. The game-log
+# connection of the sheet goes straight to D&D Beyond.
+LOGIN_HOSTS = {"auth-service.dndbeyond.com", "character-service.dndbeyond.com", "gamedata-service.dndbeyond.com",
+               "dice-service.dndbeyond.com", "api.dndbeyond.com", "game-log-rest-live.dndbeyond.com"}
+PUBLIC_HOSTS = {"media.dndbeyond.com", "images.dndbeyond.com"}   # public files, fetched without the login
+PUBLIC_PATHS = ("/app/", "/content/", "/Content/", "/dice/", "/avatars/")  # same, on www.dndbeyond.com
+REFUSED = set()
+KETCH_RE = re.compile(r"<script>(?:(?!</script>).)*?ketchcdn(?:(?!</script>).)*?</script>", re.S)
+REROUTE_JS = r"""var P="__PRE__";function rw(u){try{var x=new URL(u,G.location.href);if(!/^https?:$/.test(x.protocol))return u;
+if(x.origin===O)return x.pathname.indexOf(P+"/")===0?u:O+P+x.pathname+x.search;
+if(/(^|\.)dndbeyond\.com$/.test(x.hostname)&&!/^fonts\./.test(x.hostname))
+return (x.hostname==="www.dndbeyond.com"||x.hostname==="dndbeyond.com")?O+P+x.pathname+x.search:O+P+"/__p/"+x.hostname+x.pathname+x.search;}catch(e){}return u;}
+var f=G.fetch;G.fetch=function(i,n){if(typeof i==="string"||i instanceof URL)i=rw(String(i));else if(i instanceof Request){var u=rw(i.url);if(u!==i.url)i=new Request(u,i);}return f.call(this,i,n);};
+if(G.XMLHttpRequest){var o=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u){var a=[].slice.call(arguments);a[1]=rw(u);return o.apply(this,a);};}"""
+PAGE_SHIM = ("<script>/* Beyond Relay: the sheet's requests to D&D Beyond go through the relay */(function(){var G=window,O=location.origin;"
+             + REROUTE_JS +
+             r"""var d=Object.getOwnPropertyDescriptor(HTMLImageElement.prototype,"src");
+Object.defineProperty(HTMLImageElement.prototype,"src",{get:d.get,set:function(v){d.set.call(this,this.crossOrigin!=null?rw(v):v);},configurable:true,enumerable:true});
+window.semaphore=[];window.ketch=function(){};})();</script>""")
+WORKER_SHIM = "(function(){var G=self,O=self.location.origin;" + REROUTE_JS + "})();\n"
+
+
+def sheet_pre():
+    return f"/s/{TOKEN}"
+
+
+def campaign_ids():
+    return set(PARTY["ids"]) | {x["entityId"] for x in PARTY["chars"]}
+
+
+def rewrite_sheet_html(html, pub):
+    base = pub + sheet_pre()
+    for h in LOGIN_HOSTS:
+        html = html.replace(f"https://{h}", f"{base}/__p/{h}")
+    html = html.replace("https://www.dndbeyond.com", base)
+    html = re.sub(r'((?:src|href)=")/(?!/)', lambda m: m.group(1) + sheet_pre() + "/", html)  # root-relative files
+    html = KETCH_RE.sub("", html)  # the cookie-banner loader
+    shim = PAGE_SHIM.replace("__PRE__", sheet_pre())
+    return re.sub(r"<head([^>]*)>", lambda m: f"<head{m.group(1)}>{shim}", html, count=1)
+
+
+def refuse(why, status=403, what=""):
+    if what and what not in REFUSED:
+        REFUSED.add(what)
+        log(f"Sheet request refused: {what}")
+    page = ("<!doctype html><meta charset=utf-8><body style='font:14px system-ui,sans-serif;padding:24px;background:#1f1f23;color:#eee'>"
+            f"<b>Beyond Relay</b><p>{why}</p><p>Use &#8635; in the panel to go back to a character sheet.</p></body>")
+    return web.Response(status=status, text=page, content_type="text/html")
+
+
+def request_character_ids(request, rest, body):
+    ids = set(re.findall(r"/character/v\d+/character/(\d+)", rest))
+    if request.query.get("characterId"):
+        ids.add(str(request.query["characterId"]))
+    if body and "json" in (request.headers.get("Content-Type") or ""):
+        try:
+            data = json.loads(body)
+            if isinstance(data, dict) and data.get("characterId") is not None:
+                ids.add(str(data["characterId"]))
+        except Exception:
+            pass
+    return ids
+
+
+async def sheet_proxy(request):
+    cfg = STATE.get("cfg")
+    if not cfg or not STATE.get("http"):
+        return refuse("Beyond Relay is still starting.", 503)
+    raw, qs, method = request.rel_url.raw_path, request.rel_url.raw_query_string, request.method
+    stale = "This relay code is no longer valid. The DM has to paste the current code in the panel settings."
+    authed = raw.startswith(sheet_pre() + "/")
+    if authed:
+        raw = raw[len(sheet_pre()):]
+    elif raw.startswith("/s/"):
+        return refuse(stale)
+    elif "k" in request.query:
+        # The sheet page itself keeps D&D Beyond's own address (/characters/<id>): the sheet program
+        # reads it to know what to show. Its secret comes as ?k=...
+        if not secrets.compare_digest(request.query["k"], TOKEN):
+            return refuse(stale)
+        authed, qs = True, ""
+    m = re.match(r"^/__p/([a-z0-9.-]+)(/.*)?$", raw)
+    host, rest = (m.group(1), m.group(2) or "/") if m else ("www.dndbeyond.com", raw)
+    body = await request.read() if request.can_read_body else None
+    camp, login, page = str(STATE["campaignId"]), False, False
+    what = f"{method} {host}{rest}"
+    if host == "www.dndbeyond.com":
+        cm = re.match(r"^/characters/(\d+)(/.*)?$", rest)
+        if cm and authed and method == "GET":
+            if cm.group(1) not in campaign_ids():
+                return refuse("That character is not part of this campaign (or the relay hasn't read the campaign yet).", what=what)
+            login = page = True
+        elif rest == "/favicon.ico":
+            return web.Response(status=204)
+        elif not (method == "GET" and rest.startswith(PUBLIC_PATHS)):
+            return refuse("This page isn't available through Beyond Relay.", what=what)
+    elif host in PUBLIC_HOSTS:
+        if method != "GET":
+            return refuse("Not available through Beyond Relay.", what=what)
+    elif host in LOGIN_HOSTS and authed:
+        ok = True
+        if host.startswith("auth-service"):
+            ok = rest == "/v1/cobalt-token"
+        elif host.startswith("api."):
+            if rest.startswith("/bi/"):
+                return web.Response(status=204)  # usage statistics: not forwarded
+            ok = rest.startswith("/campaigns/") and f"/{camp}" in rest
+        elif host.startswith("game-log-rest"):
+            ok = rest == "/v1/getmessages" and request.query.get("gameId") == camp
+        elif host.startswith("character-service"):
+            ids = request_character_ids(request, rest, body) - {"0"}  # 0 = "no particular character"
+            ok = rest.startswith("/character/") and ids <= campaign_ids()
+            if not ok:
+                what += f" (character ids {sorted(ids)}; body {(body or b'')[:200]!r})"
+        if not ok:
+            return refuse("Not available through Beyond Relay.", what=what)
+        login = True
+    else:
+        return refuse("Not available through Beyond Relay.", what=what)
+
+    headers = {"User-Agent": UA, "Accept": request.headers.get("Accept") or "*/*", "Referer": DDB + "/"}
+    for k in ("Content-Type", "Authorization", "Accept-Language"):
+        if request.headers.get(k):
+            headers[k] = request.headers[k]
+    for k, v in request.headers.items():
+        kl = k.lower()
+        if kl.startswith("x-") and not kl.startswith(("x-forwarded", "x-real")):
+            headers[k] = v
+    if login:
+        headers["Cookie"] = f"CobaltSession={cfg['cobalt']}"
+        if method != "GET" or request.headers.get("Origin"):
+            headers["Origin"] = DDB
+    url = f"https://{host}{rest}" + (f"?{qs}" if qs else "")
+    try:
+        async with STATE["http"].request(method, url, data=body or None, headers=headers, allow_redirects=True) as r:
+            status_code, ctype, data = r.status, r.headers.get("Content-Type") or "application/octet-stream", await r.read()
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        log(f"Sheet request failed: {what}: {e!r}")
+        return web.Response(status=502, text="Beyond Relay could not reach D&D Beyond")
+    if page and status_code == 200 and "text/html" in ctype:
+        pub = f"{request.headers.get('X-Forwarded-Proto') or request.scheme}://{request.host}"
+        data = rewrite_sheet_html(data.decode("utf-8", "replace"), pub).encode("utf-8")
+        cid = re.match(r"^/characters/(\d+)", rest).group(1)
+        name = next((x["name"] for x in PARTY["chars"] if x["entityId"] == cid), cid)
+        log(f"Sheet opened in Owlbear: {name}")
+    elif host == "www.dndbeyond.com" and status_code == 200 and re.search(r"^/dice/.*[wW]orker[^/]*\.js$", rest):
+        data = WORKER_SHIM.replace("__PRE__", sheet_pre()).encode() + data  # the dice workers fetch their files themselves
+    resp = web.Response(status=status_code, body=data, headers={
+        "Content-Type": ctype, "Cache-Control": "no-store" if login else "public, max-age=86400"})
+    if len(data) > 2048 and re.match(r"text/|application/(json|javascript|x-javascript)|image/svg", ctype):
+        resp.enable_compression()
+    return resp
+
+
+async def dispatch(request):
+    if request.headers.get("Upgrade", "").lower() == "websocket":
+        return await panel_socket(request)
+    if request.method == "OPTIONS":
+        return web.Response(status=204)
+    return await sheet_proxy(request)
 
 
 async def set_status(connected, text, error=""):
@@ -993,13 +1169,27 @@ async def relay_main(cfg):
     STATE["campaignId"] = str(cfg["campaignId"])
     STATE["cfg"] = cfg
     port = int(cfg.get("port") or DEFAULT_PORT)
+    app = web.Application(client_max_size=8 * 1024 * 1024)
+    app.router.add_route("*", "/{tail:.*}", dispatch)
+    runner = web.AppRunner(app, access_log=None)
+    await runner.setup()
     try:
-        server = await websockets.serve(client_handler, "localhost", port)
+        await web.TCPSite(runner, "127.0.0.1", port).start()
     except OSError as e:
+        await runner.cleanup()
         status(f"Port {port} is already in use (is another relay running?): {e}", False); return
-    async with server:
-        log(f"Local endpoint: ws://127.0.0.1:{port}")
+    try:
+        await web.TCPSite(runner, "::1", port).start()  # "localhost" means this address first on some systems
+    except OSError:
+        pass
+    STATE["http"] = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60))
+    try:
+        log(f"Local endpoint: http://127.0.0.1:{port}")
         await asyncio.gather(game_log(cfg), party_watch(cfg))
+    finally:
+        await STATE["http"].close()
+        STATE["http"] = None
+        await runner.cleanup()
 
 
 TUNNEL_OFF = bool(__import__("os").environ.get("RELAY_NO_TUNNEL"))  # for local testing only
@@ -1055,7 +1245,7 @@ def run_gui():
     frm.pack(fill="both", expand=True)
     frm.columnconfigure(1, weight=1)
 
-    ttk.Label(frm, text="Shows your D&D Beyond campaign's rolls in Owlbear. Keep this window open while playing.",
+    ttk.Label(frm, text="Connects your D&D Beyond campaign to Owlbear: rolls, hit points, monsters and the character sheets. Keep this window open while playing.",
               wraplength=540).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
 
     ttk.Label(frm, text="Campaign link").grid(row=1, column=0, sticky="w")
