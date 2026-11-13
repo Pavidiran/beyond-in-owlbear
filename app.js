@@ -4,9 +4,9 @@
 // like Chrome and Edge never pass a D&D Beyond login to a page embedded in Owlbear). Rolls arrive through
 // the relay too (see bg.js); initiative rolls fill the battle tracker.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
-import { NS, KEYS, HIDDEN_LOG, LOG_MAX, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode, relayUrl, relaySheetUrl } from "./shared.js?v=0.9.0";
+import { NS, KEYS, HIDDEN_LOG, LOG_MAX, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode, relayUrl, relaySheetUrl } from "./shared.js?v=0.9.1";
 
-const VERSION = "0.9.0";
+const VERSION = "0.9.1";
 const RELAY_MIN = "0.10.0"; // monster search, stat blocks and monster rolls need this Beyond Relay version
 const SIZES = { compact: [440, 620], tall: [440, 900], wide: [620, 900] };
 const DDB = "https://www.dndbeyond.com";
@@ -16,7 +16,7 @@ const RELAY_TEST = LOCAL ? new URLSearchParams(location.search).get("relay") || 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 let ME = { id: "", name: "", role: "PLAYER" }, META = {};
-let PREF = { zoom: 0.8, size: "tall", char: "", drawer: "" }; // char = id of the character this player opened
+let PREF = { zoom: 0.8, size: "tall", char: "", drawer: "" }; // char = the character this player opened last (marked in the list)
 try { Object.assign(PREF, JSON.parse(localStorage.getItem("bio-pref") || "{}")); } catch {}
 if (!PREF.char && PREF.last) PREF.char = (String(PREF.last).match(/\/characters\/(\d+)/) || [])[1] || ""; // from before 0.9
 delete PREF.last;
@@ -99,6 +99,7 @@ async function relayCall(type, data, ms = 20000) {
 // The frame shows the picked character's sheet, served by Beyond Relay. It is cross-origin, so the
 // browser never tells us what happens inside: we only know the address we opened ourselves.
 let shown = "", wasLive = false;
+let openId = ""; // the character picked in this session: the panel always starts at the character list
 const relayLive = () => !!RELAY_TEST || relayState().cls === "live";
 function sheetUrl(id) {
   if (RELAY_TEST) { try { const u = new URL(RELAY_TEST); return `http://${u.host}/characters/${id}?k=${u.searchParams.get("k")}`; } catch { return ""; } }
@@ -107,7 +108,7 @@ function sheetUrl(id) {
 // Called on every room change: loads the sheet when the relay (re)appears or its code changes, and
 // covers the frame with a note while the relay is off. force = load again even if nothing changed.
 function showSheet(force = false) {
-  const live = relayLive(), ps = party(), id = PREF.char;
+  const live = relayLive(), ps = party(), id = openId;
   const known = !!id && (!ps.length || ps.some((p) => p.entityId === id));
   const url = live && known ? sheetUrl(id) : "";
   const off = $("off");
@@ -117,7 +118,7 @@ function showSheet(force = false) {
   } else {
     const dm = ME.role === "GM";
     const html = !live
-      ? `<b>No character sheets right now</b><div>${dm ? esc(relayState().text) + ". Start Beyond Relay and paste its code in the settings (⚙)." : "They appear while the DM's Beyond Relay is running."}</div>` +
+      ? `<b>No character sheets right now</b><div>${dm ? esc(relayState().text) : "They appear while the DM's Beyond Relay is running."}</div>${dm ? `<div>The relay code is set in the room settings (⚙).</div>` : ""}` +
         `<button data-act="tab">Open D&amp;D Beyond in a browser tab</button>`
       : `<b>Pick a character</b><div>${ps.length ? "Press ↻ and choose your character." : "Waiting for the campaign's character list from Beyond Relay..."}</div>`;
     if (off.__html !== html) { off.__html = html; off.innerHTML = html; }
@@ -412,7 +413,7 @@ function renderPicker() {
     (ps.length ? ps.map((p) => `<button class="pick${p.entityId === PREF.char ? " on" : ""}" data-act="openChar" data-id="${esc(p.entityId)}"><span>${esc(p.name)}</span>${hpBadge(p)}</button>`).join("")
       : `<div class="muted">The campaign's characters appear here while the DM's Beyond Relay is running.</div>`) +
     `<div class="muted">The sheets are the real D&amp;D Beyond sheets, fetched by the DM's Beyond Relay: nobody needs to sign in. Your sheet reloads by itself when the DM changes your HP.</div>` +
-    (PREF.char && ps.some((p) => p.entityId === PREF.char) ? `<div class="pother"><button class="ghost" data-act="pickerClose">Back to the sheet</button></div>` : "");
+    (openId && ps.some((p) => p.entityId === openId) ? `<div class="pother"><button class="ghost" data-act="pickerClose">Back to the sheet</button></div>` : "");
   if (el.__html !== html) { el.__html = html; el.innerHTML = html; } // unchanged: leave the buttons alone
 }
 function showPicker(on) { $("picker").hidden = !on; renderPicker(); }
@@ -428,8 +429,8 @@ async function onAction(act, el) {
     case "zoomOut": PREF.zoom = Math.max(0.5, +(PREF.zoom - 0.05).toFixed(2)); savePref(); layout(); break;
     case "zoomIn": PREF.zoom = Math.min(1.2, +(PREF.zoom + 0.05).toFixed(2)); savePref(); layout(); break;
     case "size": PREF.size = PREF.size === "compact" ? "tall" : PREF.size === "tall" ? "wide" : "compact"; savePref(); layout(); await applySize(); break;
-    case "openChar": PREF.char = String(ds.id); savePref(); showPicker(false); closeSheet(); showSheet(true); break;
-    case "tab": window.open(PREF.char ? `${DDB}/characters/${PREF.char}` : `${DDB}/characters`, "_blank"); break;
+    case "openChar": openId = PREF.char = String(ds.id); savePref(); showPicker(false); closeSheet(); showSheet(true); break;
+    case "tab": window.open(openId ? `${DDB}/characters/${openId}` : `${DDB}/characters`, "_blank"); break;
     case "gm": $("campaign").value = config().campaignUrl; $("relayCode").value = config().relayCode || ""; $("mHidden").checked = !!config().monsterHidden; $("gm").hidden = !$("gm").hidden; break;
     case "gmClose": $("gm").hidden = true; break;
     case "gmSave": {
@@ -537,7 +538,7 @@ async function start() {
   // After a DM edit, a sheet showing that character reloads (D&D Beyond doesn't notice outside changes).
   let refreshT = null;
   if (!LOCAL) OBR.broadcast.onMessage(`${NS}/hp-edited`, (ev) => {
-    if (ev.data && PREF.char && String(ev.data.entityId) === PREF.char) {
+    if (ev.data && openId && String(ev.data.entityId) === openId) {
       clearTimeout(refreshT); refreshT = setTimeout(() => showSheet(true), 1500); // one reload after a burst of clicks
     }
   });

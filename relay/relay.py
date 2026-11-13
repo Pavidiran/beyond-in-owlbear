@@ -42,7 +42,7 @@ for _s in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code
     except Exception:
         pass
 
-VERSION = "0.11.0"
+VERSION = "0.11.1"
 DDB = "https://www.dndbeyond.com"
 AUTH_URL = "https://auth-service.dndbeyond.com/v1/cobalt-token"
 WS_URL = "wss://game-log-api-live.dndbeyond.com/v1"
@@ -922,7 +922,7 @@ async def panel_socket(request):
 LOGIN_HOSTS = {"auth-service.dndbeyond.com", "character-service.dndbeyond.com", "gamedata-service.dndbeyond.com",
                "dice-service.dndbeyond.com", "api.dndbeyond.com", "game-log-rest-live.dndbeyond.com"}
 PUBLIC_HOSTS = {"media.dndbeyond.com", "images.dndbeyond.com"}   # public files, fetched without the login
-PUBLIC_PATHS = ("/app/", "/content/", "/Content/", "/dice/", "/avatars/")  # same, on www.dndbeyond.com
+PUBLIC_PATHS = ("/app/", "/content/", "/Content/", "/dice/", "/avatars/", "/attachments/")  # same, on www.dndbeyond.com
 REFUSED = set()
 KETCH_RE = re.compile(r"<script>(?:(?!</script>).)*?ketchcdn(?:(?!</script>).)*?</script>", re.S)
 REROUTE_JS = r"""var P="__PRE__";function rw(u){try{var x=new URL(u,G.location.href);if(!/^https?:$/.test(x.protocol))return u;
@@ -952,6 +952,9 @@ def rewrite_sheet_html(html, pub):
     for h in LOGIN_HOSTS:
         html = html.replace(f"https://{h}", f"{base}/__p/{h}")
     html = html.replace("https://www.dndbeyond.com", base)
+    # The site header's script is a module: D&D Beyond's file server only hands it to its own site, and
+    # without it the header keeps its tall default and covers the top of the sheet on narrow screens.
+    html = html.replace('src="https://media.dndbeyond.com/mega-menu/', f'src="{base}/__p/media.dndbeyond.com/mega-menu/')
     html = re.sub(r'((?:src|href)=")/(?!/)', lambda m: m.group(1) + sheet_pre() + "/", html)  # root-relative files
     html = KETCH_RE.sub("", html)  # the cookie-banner loader
     shim = PAGE_SHIM.replace("__PRE__", sheet_pre())

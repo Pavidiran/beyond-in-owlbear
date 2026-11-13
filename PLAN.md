@@ -307,3 +307,17 @@ relay off = note in the panel + ↗ to D&D Beyond in a normal tab; Campaign butt
   at once, sessions longer than a few minutes, level-up/builder pages.
 - Noted: D&D Beyond's own header (with its Sign in link) is still part of the page; its links lead to
   the relay's "not available" note.
+
+## Fixes after the first Owlbear test: extension 0.9.1, relay 0.11.1 (2026-11-13)
+User tested 0.9.0 / 0.11.0 in Owlbear through the tunnel: the sheet loads and works. Reported:
+- Gray circle at the top left while the relay is off: the status dot has class "off" (relay state) and
+  the new note over the frame used the same class name. Note renamed to .nosheet.
+- Top of the sheet (character name) covered by D&D Beyond's site header: the header's script is a module
+  on media.dndbeyond.com, which only allows www.dndbeyond.com (CORS), so it never ran; the header kept
+  its 66 px default while the sheet header sits at a fixed 47 px. The relay now rewrites that script's
+  src to go through itself; with the script running the sheet header is placed below the site header
+  (verified at 440 and 550 px). Side effects: the header menu shows the DM's account name/menu (its links
+  are refused by the relay), and the script asks auth-service-stg (staging) for a token, which is refused.
+- Panel should start at the character selection, not with the last sheet: openId (per session) decides
+  what the frame shows; PREF.char only marks the last-used character in the list.
+- Relay-off note for the DM no longer appends "Start Beyond Relay..." to notes like "Wrong relay code".
