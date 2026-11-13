@@ -247,3 +247,37 @@ Dice+ no longer needed for monster rolls (optional extra only).
 - Adding rows still rolls a quick local initiative (and Re-roll enemies); the sheet's Initiative
   button rolls through D&D Beyond.
 - Advantage/disadvantage: not built. Decision (user): the DM simply rolls twice.
+
+## Chrome/Edge can't be signed in inside the panel; relay-served sheets tested (2026-11-13)
+PROBLEM (reproduced in Chrome 157 and Edge 157 with a local two-site test): D&D Beyond's login cookie
+(CobaltSession) has no SameSite attribute; Chromium treats that as Lax and never sends it to a page
+embedded in another site. So the framed sheet is always logged out in every Chromium browser, whatever
+the settings (Storage Access only covers SameSite=None cookies; the Edge override policy is obsolete since
+132). Firefox does not apply Lax-by-default, which is why the framed sheet works there. The README's
+"Chrome and Edge need nothing" was never tested and is wrong.
+REJECTED by the user: opening the sheet in its own window on Chromium (design change, not wanted).
+
+IDEA (user likes it): players never log in; the panel frames the RELAY's address and the relay fetches
+the sheet with the DM's login. FEASIBILITY TEST with a throwaway local proxy (not in the repo), results:
+- The sheet page carries its service addresses as settings in the HTML (data-config: authUrl,
+  CHARACTER_SERVICE, GAME_DATA_SERVICE, diceServiceUrl, ddbApiUrl, baseUrl, getMessagesUrl). Rewriting those
+  + a small fetch/XHR reroute for leftovers is enough for the sheet itself. The big program files still
+  load straight from media.dndbeyond.com.
+- 3D dice need two more catches, because media.dndbeyond.com only allows www.dndbeyond.com to fetch:
+  dice pictures (img with crossOrigin) and the dice workers' own fetches (shim prepended to
+  /dice/mobile/*Worker*.js, which passes through the proxy).
+- The game-log websocket opens directly from the foreign origin (no proxy needed).
+- The DM login gets canEdit=true on characters owned by other accounts: the sheet is in edit mode.
+- VERIFIED: sheet rendered, one Acrobatics roll with 3D dice, sent deferred + fulfilled, stored in the game
+  log as character "Elf Wizard" (posted under the DM's user id). Also rendered inside a cross-site iframe
+  in real Chrome 157 and Edge 157 (title, skills, websocket open; no D&D Beyond cookie in the browser).
+- Requests seen through the proxy: auth-service cobalt-token; character-service character/v5/*
+  (character, rule-data, featureflag, characters/list, vehicles, infusions, party inventory);
+  gamedata-service; dice-service; api.dndbeyond.com campaigns; game-log-rest getmessages; www /app, /dice,
+  /avatars, /content. api.dndbeyond.com/bi/events answers 403 (analytics, irrelevant).
+NOT tested yet: through the Cloudflare tunnel inside Owlbear, Firefox/Safari, several players at once,
+long sessions, other tabs of the sheet (spells, inventory, level-up), D&D Beyond's cookie banner (appears
+in the frame; would reappear every session because the tunnel address changes).
+OPEN DECISIONS (user): everyone acts with the DM's account (who may open/edit what; relay must restrict
+to the campaign's sheets), dice settings are the DM's for everybody, account/ToS risk, whether Firefox
+keeps the direct sheet, what the panel shows when the relay is off.
