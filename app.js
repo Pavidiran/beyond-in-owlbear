@@ -4,9 +4,9 @@
 // like Chrome and Edge never pass a D&D Beyond login to a page embedded in Owlbear). Rolls arrive through
 // the relay too (see bg.js); initiative rolls fill the battle tracker.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
-import { NS, KEYS, HIDDEN_LOG, LOG_MAX, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode, relayUrl, relaySheetUrl } from "./shared.js?v=0.9.1";
+import { NS, KEYS, HIDDEN_LOG, LOG_MAX, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode, relayUrl, relaySheetUrl } from "./shared.js?v=0.9.2";
 
-const VERSION = "0.9.1";
+const VERSION = "0.9.2";
 const RELAY_MIN = "0.10.0"; // monster search, stat blocks and monster rolls need this Beyond Relay version
 const SIZES = { compact: [440, 620], tall: [440, 900], wide: [620, 900] };
 const DDB = "https://www.dndbeyond.com";
@@ -16,10 +16,12 @@ const RELAY_TEST = LOCAL ? new URLSearchParams(location.search).get("relay") || 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 let ME = { id: "", name: "", role: "PLAYER" }, META = {};
-let PREF = { zoom: 0.8, size: "tall", char: "", drawer: "" }; // char = the character this player opened last (marked in the list)
+let PREF = { zoom: 1, size: "tall", char: "", drawer: "" }; // char = the character this player opened last (marked in the list)
 try { Object.assign(PREF, JSON.parse(localStorage.getItem("bio-pref") || "{}")); } catch {}
 if (!PREF.char && PREF.last) PREF.char = (String(PREF.last).match(/\/characters\/(\d+)/) || [])[1] || ""; // from before 0.9
 delete PREF.last;
+// The default zoom was 80% until 0.9.1 and got saved in every browser: move those to the new default once.
+if (!PREF.z100) { if (PREF.zoom === 0.8) PREF.zoom = 1; PREF.z100 = true; }
 const savePref = () => { try { localStorage.setItem("bio-pref", JSON.stringify(PREF)); } catch {} };
 const UI = {
   confirmClear: 0,
