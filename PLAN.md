@@ -246,4 +246,4 @@ Dice+ no longer needed for monster rolls (optional extra only).
   with the same name ("Goblin 2").
 - Adding rows still rolls a quick local initiative (and Re-roll enemies); the sheet's Initiative
   button rolls through D&D Beyond.
-- Not yet: advantage/disadvantage (D&D Beyond's message format for it not captured yet).
+- Advantage/disadvantage: not built. Decision (user): the DM simply rolls twice.
