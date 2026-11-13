@@ -42,7 +42,7 @@ for _s in (sys.stdout, sys.stderr):  # Windows consoles default to a legacy code
     except Exception:
         pass
 
-VERSION = "0.11.1"
+VERSION = "0.11.2"
 DDB = "https://www.dndbeyond.com"
 AUTH_URL = "https://auth-service.dndbeyond.com/v1/cobalt-token"
 WS_URL = "wss://game-log-api-live.dndbeyond.com/v1"
@@ -1094,8 +1094,11 @@ async def set_status(connected, text, error=""):
 async def game_log(cfg):
     backoff = [1, 2, 5, 10, 20, 30]
     attempt = 0
+    renewing = False  # planned reconnect with a fresh session token: not reported as "disconnected"
     while True:
-        await set_status(False, "Connecting to D&D Beyond...")
+        if not renewing:
+            await set_status(False, "Connecting to D&D Beyond...")
+        renewing = False
         try:
             token, ttl, user_id = await asyncio.to_thread(fetch_token, cfg["cobalt"])
         except urllib.error.HTTPError as e:
@@ -1118,7 +1121,7 @@ async def game_log(cfg):
                 while True:
                     remaining = lifetime - (time.time() - opened)
                     if remaining <= 0:
-                        log("Refreshing session token"); break
+                        log("Refreshing session token"); renewing = True; break
                     try:
                         raw = await asyncio.wait_for(ws.recv(), timeout=remaining)
                     except asyncio.TimeoutError:

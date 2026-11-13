@@ -4,9 +4,9 @@
 // like Chrome and Edge never pass a D&D Beyond login to a page embedded in Owlbear). Rolls arrive through
 // the relay too (see bg.js); initiative rolls fill the battle tracker.
 import OBR from "https://cdn.jsdelivr.net/npm/@owlbear-rodeo/sdk@3.1.0/+esm";
-import { NS, KEYS, HIDDEN_LOG, LOG_MAX, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode, relayUrl, relaySheetUrl } from "./shared.js?v=0.9.2";
+import { NS, KEYS, HIDDEN_LOG, LOG_MAX, uid, sortEntries, advanceTurn, emptyBattle, describe, cleanRelayCode, relayUrl, relaySheetUrl } from "./shared.js?v=0.9.3";
 
-const VERSION = "0.9.2";
+const VERSION = "0.9.3";
 const RELAY_MIN = "0.10.0"; // monster search, stat blocks and monster rolls need this Beyond Relay version
 const SIZES = { compact: [440, 620], tall: [440, 900], wide: [620, 900] };
 const DDB = "https://www.dndbeyond.com";
@@ -100,15 +100,24 @@ async function relayCall(type, data, ms = 20000) {
 // ------------------------------------------------------------------ sheet frame
 // The frame shows the picked character's sheet, served by Beyond Relay. It is cross-origin, so the
 // browser never tells us what happens inside: we only know the address we opened ourselves.
-let shown = "", wasLive = false;
+let shown = "", lastLive = 0, graceT = null;
+const LIVE_GRACE = 20000; // ms
 let openId = ""; // the character picked in this session: the panel always starts at the character list
-const relayLive = () => !!RELAY_TEST || relayState().cls === "live";
+// A short "not live" (the relay reconnecting to D&D Beyond, a late heartbeat) must not touch the sheet:
+// the sheet's own requests keep working meanwhile. Only a relay that stays off covers the frame.
+function relayLive() {
+  if (RELAY_TEST) return true;
+  if (relayState().cls === "live") { lastLive = Date.now(); return true; }
+  if (Date.now() - lastLive < LIVE_GRACE) { clearTimeout(graceT); graceT = setTimeout(showSheet, LIVE_GRACE + 500); return true; }
+  return false;
+}
 function sheetUrl(id) {
   if (RELAY_TEST) { try { const u = new URL(RELAY_TEST); return `http://${u.host}/characters/${id}?k=${u.searchParams.get("k")}`; } catch { return ""; } }
   return relaySheetUrl(config().relayCode, id);
 }
-// Called on every room change: loads the sheet when the relay (re)appears or its code changes, and
-// covers the frame with a note while the relay is off. force = load again even if nothing changed.
+// Called on every room change: loads the sheet when its address changes (first pick, new relay code) and
+// covers the frame with a note while the relay is off. It never reloads a sheet just because the relay
+// came back: force = load again even though the address is the same (picked again, DM changed the HP).
 function showSheet(force = false) {
   const live = relayLive(), ps = party(), id = openId;
   const known = !!id && (!ps.length || ps.some((p) => p.entityId === id));
@@ -116,7 +125,7 @@ function showSheet(force = false) {
   const off = $("off");
   if (url) {
     off.hidden = true;
-    if (force || url !== shown || !wasLive) { shown = url; $("frame").src = url; }
+    if (force || url !== shown) { shown = url; $("frame").src = url; }
   } else {
     const dm = ME.role === "GM";
     const html = !live
@@ -127,7 +136,6 @@ function showSheet(force = false) {
     off.hidden = false;
     if (live && ps.length && $("picker").hidden) showPicker(true); // nothing picked yet (or that character left the campaign)
   }
-  wasLive = live;
 }
 function hint(t) { $("hint").textContent = t; $("hint").hidden = !t; }
 

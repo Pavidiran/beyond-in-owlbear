@@ -321,3 +321,14 @@ User tested 0.9.0 / 0.11.0 in Owlbear through the tunnel: the sheet loads and wo
 - Panel should start at the character selection, not with the last sheet: openId (per session) decides
   what the frame shows; PREF.char only marks the last-used character in the list.
 - Relay-off note for the DM no longer appends "Start Beyond Relay..." to notes like "Wrong relay code".
+
+## Sheet reloaded every 4 min 20 s: fixed in extension 0.9.3, relay 0.11.2 (2026-11-13)
+Cause (confirmed in the user's relay.log: "Sheet opened" 1-2 s after every "Refreshing session token"):
+the relay reconnects its game-log socket with a fresh token every ttl-40 s and reported that as
+connected=false then true; the panel reloaded the frame whenever the relay "came back" (!wasLive).
+- Panel: never reloads because the relay came back. The frame is (re)loaded only when its address changes
+  (first pick, new relay code) or on force (picked again from the list, DM changed that character's HP).
+  A "not live" shorter than 20 s is ignored (no note over the frame). Verified with simulated state flips.
+- Relay: a planned token renewal is no longer reported as disconnected (verified with ttl forced to 70 s:
+  two renewals, only connected=true statuses sent).
+- Extension 0.9.2 before that: default zoom 100% (browsers on the old saved default 0.8 move over once).
